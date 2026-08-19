@@ -1,0 +1,15 @@
+# Legacy sandbox state and runtime files (if any)
+.state/
+.host-exec/
+docker-compose.override.yml
+
+# Whitelist template is tracked, local overrides in ~/.antigravity-sandbox/
+config/whitelist.json
+!config/whitelist.default.json
+
+# Python caches
+__pycache__/
+*.pyc
+
+# macOS system files
+.DS_Store

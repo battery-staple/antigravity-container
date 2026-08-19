@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Google Antigravity Sandbox: In-Container xdg-open Bridge
+# ==============================================================================
+# Intercepts browser open calls inside the container (e.g. Google OAuth login)
+# and opens them on the host macOS desktop via host-exec, or prints the URL.
+# ==============================================================================
+
+set -euo pipefail
+
+URL="${1:-}"
+
+if [ -z "$URL" ]; then
+    echo "Usage: xdg-open <url>" >&2
+    exit 1
+fi
+
+echo "==========================================================" >&2
+echo "  [Browser Request] Opening URL:" >&2
+echo "  $URL" >&2
+echo "==========================================================" >&2
+
+# Attempt to open on host macOS via host-exec if available
+if command -v host-exec >/dev/null 2>&1 && [ -S "/var/run/host-exec/host_exec.sock" ]; then
+    host-exec open "$URL" 2>/dev/null || true
+fi
+
+exit 0

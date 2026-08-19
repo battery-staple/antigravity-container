@@ -1,0 +1,546 @@
+#!/bin/bash
+set -e
+
+CALLER_PWD="$PWD"
+
+# Robust symlink resolution for DIR
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.orbstack/bin:$HOME/.docker/bin:$PATH"
+
+COMMAND="$1"
+shift || true
+
+SANDBOX_DIR="$HOME/.antigravity-sandbox"
+WHITELIST_FILE="$SANDBOX_DIR/whitelist.json"
+DEFAULT_WHITELIST_FILE="$DIR/config/whitelist.default.json"
+LEGACY_WHITELIST_FILE="$DIR/config/whitelist.json"
+OVERRIDE_COMPOSE_FILE="$SANDBOX_DIR/docker-compose.override.yml"
+IPC_DIR="$SANDBOX_DIR/ipc"
+LOGS_DIR="$SANDBOX_DIR/logs"
+BIN_DIR="$SANDBOX_DIR/bin"
+
+function run_compose() {
+  local compose_args=("-f" "$DIR/docker-compose.yml")
+  if [ -f "$OVERRIDE_COMPOSE_FILE" ]; then
+    compose_args+=("-f" "$OVERRIDE_COMPOSE_FILE")
+  fi
+  HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose "${compose_args[@]}" "$@"
+}
+
+function show_help() {
+  echo "=========================================================="
+  echo "  Antigravity Sandbox Manager CLI"
+  echo "=========================================================="
+  echo "Usage: antigravity-sandbox <command> [options]"
+  echo ""
+  echo "Workspace Management Commands:"
+  echo "  workspace add [path] [-y|--force]   Whitelist a workspace directory (defaults to current dir)"
+  echo "  workspace remove <path>             Remove a workspace directory from whitelist"
+  echo "  workspace list                      List all currently whitelisted workspaces"
+  echo "  (Aliases: ws add, ws rm, ws ls)"
+  echo ""
+  echo "Core Commands:"
+  echo "  start                               Start the sandbox container with whitelisted workspaces"
+  echo "  stop                                Stop the running sandbox container"
+  echo "  restart                             Restart the sandbox container"
+  echo "  build                               Rebuild the sandbox container image (after Dockerfile edits)"
+  echo "  status                              Display current sandbox status and resource usage"
+  echo "  shell                               Open an interactive bash shell inside the sandbox"
+  echo "  app                                 Launch Antigravity Desktop App connected to Sandbox"
+  echo "  download-ls [options]               Download & install Linux language_server binary for Web UI"
+  echo "  host-bridge                         Start the host binary execution bridge daemon"
+  echo "  help                                Show this help message"
+  echo "=========================================================="
+}
+
+function ensure_whitelist_config() {
+  mkdir -p "$SANDBOX_DIR" "$IPC_DIR" "$LOGS_DIR" "$BIN_DIR" "$HOME/.gemini/antigravity/brain" "$HOME/.gemini/config/rules" 2>/dev/null || true
+  chmod 0700 "$IPC_DIR" 2>/dev/null || true
+
+  python3 -c "
+import os, sys, json, shutil
+cfg = '$WHITELIST_FILE'
+legacy_cfg = '$LEGACY_WHITELIST_FILE'
+default_cfg = '$DEFAULT_WHITELIST_FILE'
+
+if not os.path.exists(cfg):
+    if os.path.exists(legacy_cfg):
+        try:
+            shutil.copyfile(legacy_cfg, cfg)
+            os.remove(legacy_cfg)
+            sys.exit(0)
+        except Exception:
+            pass
+    if os.path.exists(default_cfg):
+        try:
+            shutil.copyfile(default_cfg, cfg)
+            sys.exit(0)
+        except Exception:
+            pass
+    data = {
+        'allowed_workspaces': [],
+        'allowed_commands': {
+            'xcodebuild': {
+                'binary_path': '/usr/bin/xcodebuild',
+                'allowed_args_regex': '^' + '(-version|-showsdks|-list.*)' + '$',
+                'require_interactive_approval': False
+            },
+            'simulator': {
+                'binary_path': '/usr/bin/open',
+                'allowed_args_regex': '^-a Simulator$',
+                'require_interactive_approval': False
+            },
+            'git-credential-osxkeychain': {
+                'binary_path': '/usr/bin/git',
+                'allowed_args_regex': '^credential-osxkeychain (get|store|erase)$',
+                'require_interactive_approval': True
+            },
+            'sw_vers': {
+                'binary_path': '/usr/bin/sw_vers',
+                'allowed_args_regex': '^.*$',
+                'require_interactive_approval': False
+            }
+        }
+    }
+    os.makedirs(os.path.dirname(cfg), exist_ok=True)
+    with open(cfg, 'w') as f:
+        json.dump(data, f, indent=2)
+"
+}
+
+function generate_compose_override() {
+  ensure_whitelist_config
+  python3 -c "
+import os, json
+cfg = '$WHITELIST_FILE'
+override = '$OVERRIDE_COMPOSE_FILE'
+try:
+    with open(cfg, 'r') as f:
+        data = json.load(f)
+    workspaces = data.get('allowed_workspaces', [])
+    valid_workspaces = [w for w in workspaces if w and os.path.isdir(w)]
+    if not valid_workspaces:
+        if os.path.exists(override):
+            os.remove(override)
+    else:
+        lines = [
+            '# Auto-generated by antigravity-sandbox CLI. Do not edit manually.',
+            'services:',
+            '  antigravity-sandbox:',
+            '    volumes:'
+        ]
+        for ws in valid_workspaces:
+            lines.append(f'      - \"{ws}:{ws}:cached\"')
+        os.makedirs(os.path.dirname(override), exist_ok=True)
+        with open(override, 'w') as f:
+            f.write('\n'.join(lines) + '\n')
+except Exception as e:
+    print(f'[Sandbox Warning] Failed to generate compose override: {e}', flush=True)
+"
+}
+
+function is_container_running() {
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^antigravity-sandbox$"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+function is_language_server_running() {
+  if is_container_running; then
+    if docker exec antigravity-sandbox pgrep -f "language_server" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+function reload_container_if_running() {
+  if is_container_running; then
+    echo "[Sandbox] Updating running container mounts..."
+    run_compose up -d
+    echo "[Sandbox] Container updated successfully."
+  fi
+}
+
+function normalize_and_validate_path() {
+  local input_path="$1"
+  local force_flag="$2"
+  
+  if [ -z "$input_path" ]; then
+    input_path="$CALLER_PWD"
+  fi
+
+  local path_status
+  path_status="$(python3 -c "
+import os, sys
+p = sys.argv[1]
+expanded = os.path.abspath(os.path.expanduser(p))
+if os.path.isdir(expanded):
+    print('DIR:' + expanded)
+elif os.path.exists(expanded):
+    print('EXISTS_NOT_DIR:' + expanded)
+else:
+    print('NOT_FOUND:' + expanded)
+" "$input_path" 2>/dev/null || true)"
+
+  if [ -z "$path_status" ]; then
+    echo "[Error] Failed to resolve path: $input_path" >&2
+    return 1
+  fi
+
+  local status_type="${path_status%%:*}"
+  local resolved_path="${path_status#*:}"
+
+  if [ "$status_type" = "EXISTS_NOT_DIR" ]; then
+    echo "[Error] Path exists but is not a directory: $resolved_path" >&2
+    return 1
+  elif [ "$status_type" = "NOT_FOUND" ]; then
+    if [ "$force_flag" = "true" ]; then
+      echo "[Sandbox] Path does not exist: $resolved_path" >&2
+      if mkdir -p "$resolved_path" 2>/dev/null; then
+        echo "[Sandbox] Created directory: $resolved_path" >&2
+      else
+        echo "[Error] Failed to create directory: $resolved_path" >&2
+        return 1
+      fi
+    else
+      echo "[Sandbox Warning] Path does not exist: $resolved_path" >&2
+      read -p "Directory does not exist. Would you like to create it? (y/N): " -r confirm >&2
+      case "$confirm" in
+        [yY]|[yY][eE][sS])
+          if mkdir -p "$resolved_path" 2>/dev/null; then
+            echo "[Sandbox] Created directory: $resolved_path" >&2
+          else
+            echo "[Error] Failed to create directory: $resolved_path" >&2
+            return 1
+          fi
+          ;;
+        *)
+          echo "[Sandbox] Operation cancelled." >&2
+          return 1
+          ;;
+      esac
+    fi
+  fi
+
+  # Check dangerous roots
+  local is_dangerous="false"
+  case "$resolved_path" in
+    "/"|"/Users"|"/home"|"$HOME"|"/Applications"|"/System"|"/Library"|"/usr"|"/bin"|"/sbin")
+      is_dangerous="true"
+      ;;
+  esac
+
+  if [ "$is_dangerous" = "true" ] && [ "$force_flag" != "true" ]; then
+    echo "[Sandbox Warning] '$resolved_path' is a broad system/user root directory." >&2
+    echo "[Sandbox Warning] Whitelisting this path grants the container access to all files within it." >&2
+    read -p "Are you sure you want to whitelist this path? (y/N): " -r confirm >&2
+    case "$confirm" in
+      [yY]|[yY][eE][sS])
+        ;;
+      *)
+        echo "[Sandbox] Operation cancelled." >&2
+        return 1
+        ;;
+    esac
+  fi
+
+  echo "$resolved_path"
+}
+
+function cmd_workspace_add() {
+  local target_raw=""
+  local force_flag="false"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -y|--force)
+        force_flag="true"
+        shift
+        ;;
+      *)
+        if [ -z "$target_raw" ]; then
+          target_raw="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$target_raw" ]; then
+    target_raw="$CALLER_PWD"
+  fi
+
+  local target_path
+  target_path="$(normalize_and_validate_path "$target_raw" "$force_flag")" || return 1
+  if [ -z "$target_path" ]; then
+    return 1
+  fi
+
+  ensure_whitelist_config
+
+  local add_result
+  add_result="$(python3 -c "
+import os, json, sys
+cfg = '$WHITELIST_FILE'
+target = sys.argv[1]
+with open(cfg, 'r') as f:
+    data = json.load(f)
+workspaces = data.get('allowed_workspaces', [])
+if target in workspaces:
+    print('ALREADY_EXISTS')
+    sys.exit(0)
+workspaces.append(target)
+data['allowed_workspaces'] = workspaces
+with open(cfg, 'w') as f:
+    json.dump(data, f, indent=2)
+print('ADDED')
+" "$target_path")"
+
+  if [ "$add_result" = "ALREADY_EXISTS" ]; then
+    echo "[Sandbox] Workspace is already whitelisted: $target_path"
+  else
+    echo "[Sandbox] Added workspace to whitelist: $target_path"
+    generate_compose_override
+    reload_container_if_running
+  fi
+}
+
+function cmd_workspace_remove() {
+  local target_raw="$1"
+  if [ -z "$target_raw" ]; then
+    echo "Usage: antigravity-sandbox workspace remove <path>" >&2
+    return 1
+  fi
+
+  local target_path
+  target_path="$(python3 -c "import os; print(os.path.abspath(os.path.expanduser('$target_raw')))")"
+
+  ensure_whitelist_config
+
+  local rm_result
+  rm_result="$(python3 -c "
+import os, json, sys
+cfg = '$WHITELIST_FILE'
+target = '$target_path'
+with open(cfg, 'r') as f:
+    data = json.load(f)
+workspaces = data.get('allowed_workspaces', [])
+if target not in workspaces:
+    matched = [w for w in workspaces if os.path.abspath(w) == target]
+    if not matched:
+        print('NOT_FOUND')
+        sys.exit(0)
+    for m in matched:
+        workspaces.remove(m)
+else:
+    workspaces.remove(target)
+data['allowed_workspaces'] = workspaces
+with open(cfg, 'w') as f:
+    json.dump(data, f, indent=2)
+print('REMOVED')
+")"
+
+  if [ "$rm_result" = "NOT_FOUND" ]; then
+    echo "[Sandbox Warning] Workspace not found in whitelist: $target_path" >&2
+    return 1
+  else
+    echo "[Sandbox] Removed workspace from whitelist: $target_path"
+    generate_compose_override
+    reload_container_if_running
+  fi
+}
+
+function cmd_workspace_list() {
+  ensure_whitelist_config
+  python3 -c "
+import os, json
+cfg = '$WHITELIST_FILE'
+try:
+    with open(cfg, 'r') as f:
+        data = json.load(f)
+    workspaces = data.get('allowed_workspaces', [])
+    print('==========================================================')
+    print('  Whitelisted Workspaces (~/.antigravity-sandbox/whitelist.json)')
+    print('==========================================================')
+    if not workspaces:
+        print('  (No workspaces whitelisted yet)')
+        print('')
+        print('  Add a workspace using:')
+        print('    antigravity-sandbox workspace add <path>')
+    else:
+        for idx, ws in enumerate(workspaces, 1):
+            exists = '✓ exists' if os.path.isdir(ws) else '✗ missing on host'
+            print(f'  {idx}. {ws}  [{exists}]')
+    print('==========================================================')
+except Exception as e:
+    print(f'Error reading whitelist: {e}')
+"
+}
+
+case "$COMMAND" in
+  workspace|ws)
+    SUB_CMD="$1"
+    shift || true
+    case "$SUB_CMD" in
+      add)
+        cmd_workspace_add "$@"
+        ;;
+      remove|rm)
+        cmd_workspace_remove "$@"
+        ;;
+      list|ls|"")
+        cmd_workspace_list
+        ;;
+      *)
+        echo "Unknown workspace command: $SUB_CMD" >&2
+        echo "Usage: antigravity-sandbox workspace [add|remove|list]" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  start)
+    if [ -n "$1" ]; then
+      echo "[Notice] 'start' no longer accepts a workspace path parameter."
+      echo "[Notice] Whitelist workspaces separately with: antigravity-sandbox workspace add <path>"
+      echo ""
+    fi
+
+    ensure_whitelist_config
+    generate_compose_override
+
+    if is_container_running; then
+      echo "[Sandbox] Antigravity Sandbox is already running."
+      if is_language_server_running; then
+        echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
+      else
+        echo "[Sandbox] Mode: Standby (ready for IDE Dev Containers & shell)."
+        echo "[Sandbox] (Web UI on port 58432 is inactive: Linux language_server binary not found)"
+      fi
+      cmd_workspace_list
+      exit 0
+    fi
+
+    # Pre-check port availability
+    if (lsof -iTCP:58432 -sTCP:LISTEN -n -P >/dev/null 2>&1 || nc -z 127.0.0.1 58432 2>/dev/null); then
+      echo "[Sandbox Warning] Port 58432 appears to be in use by an existing host process." >&2
+    fi
+
+    NUM_WORKSPACES=$(python3 -c "
+import json
+try:
+    with open('$WHITELIST_FILE', 'r') as f:
+        print(len(json.load(f).get('allowed_workspaces', [])))
+except Exception:
+    print(0)
+")
+
+    if [ "$NUM_WORKSPACES" -eq 0 ]; then
+      echo "[Sandbox] Starting Antigravity Sandbox in standby mode (0 workspaces mounted)..."
+      echo "[Sandbox] You can add workspaces anytime using: antigravity-sandbox workspace add <path>"
+    else
+      echo "[Sandbox] Starting Antigravity Sandbox with VirtioFS..."
+      cmd_workspace_list
+    fi
+
+    run_compose up -d
+    sleep 1
+    if is_language_server_running; then
+      echo "[Sandbox] Sandbox is running with Language Server daemon."
+      echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
+    else
+      echo "[Sandbox] Sandbox is running in Standby Mode (container healthy & ready)."
+      echo "[Sandbox] - Attach from Antigravity IDE: Command Palette -> 'Dev Containers: Attach to Running Container...'"
+      echo "[Sandbox] - Open terminal shell: antigravity-sandbox shell"
+      echo "[Sandbox] - To enable in-container Web UI (https://127.0.0.1:58432):"
+      echo "[Sandbox]   Place Linux ELF binary at ~/.antigravity-sandbox/bin/language_server and restart."
+    fi
+    ;;
+
+  stop)
+    echo "[Sandbox] Stopping Sandbox..."
+    run_compose down
+    ;;
+
+  restart)
+    echo "[Sandbox] Restarting Sandbox..."
+    generate_compose_override
+    run_compose restart
+    sleep 1
+    if is_language_server_running; then
+      echo "[Sandbox] Sandbox is running with Language Server daemon."
+      echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
+    else
+      echo "[Sandbox] Sandbox is running in Standby Mode."
+    fi
+    ;;
+
+  build)
+    echo "[Sandbox] Building/Rebuilding Sandbox image from Dockerfile.sandbox..."
+    run_compose build
+    ;;
+
+  status)
+    run_compose ps
+    if is_language_server_running; then
+      echo "[Status] Language Server daemon: Active (Listening on https://127.0.0.1:58432)"
+    elif is_container_running; then
+      echo "[Status] Container Mode: Standby (Ready for Antigravity IDE Dev Containers / shell)"
+      echo "[Status] In-container Web UI (port 58432): Inactive (No Linux language_server binary found)"
+    fi
+    docker stats --no-stream antigravity-sandbox 2>/dev/null || true
+    echo ""
+    cmd_workspace_list
+    ;;
+
+  shell)
+    docker exec -it antigravity-sandbox /bin/bash
+    ;;
+
+  app)
+    if ! is_container_running; then
+      echo "[Antigravity] Starting sandbox container first..."
+      "$DIR/scripts/antigravity-sandbox" start
+    fi
+    if ! is_language_server_running; then
+      echo "[Antigravity Warning] In-container language server is not active on port 58432."
+      echo "[Antigravity Warning] Place Linux language_server at ~/.antigravity-sandbox/bin/language_server to enable sandbox backend."
+    fi
+    echo "[Antigravity] Launching Native Desktop App connected to Sandbox (127.0.0.1:58432)..."
+    APP_BIN="/Applications/Antigravity.app/Contents/MacOS/Antigravity"
+    if [ -x "$APP_BIN" ]; then
+      DEV_URL="https://127.0.0.1:58432" "$APP_BIN" >/dev/null 2>&1 &
+    elif [ -x "/Applications/Antigravity.app/Contents/MacOS/Electron" ]; then
+      DEV_URL="https://127.0.0.1:58432" "/Applications/Antigravity.app/Contents/MacOS/Electron" >/dev/null 2>&1 &
+    else
+      DEV_URL="https://127.0.0.1:58432" open -a "/Applications/Antigravity.app"
+    fi
+    ;;
+
+  host-bridge)
+    echo "[Bridge] Starting Host-Exec Daemon on macOS..."
+    python3 "$DIR/bridge/host_exec_daemon.py"
+    ;;
+
+  download-ls|download|get-ls)
+    "$DIR/scripts/download-language-server.sh" "$@"
+    ;;
+
+  help|--help|-h)
+    show_help
+    ;;
+
+  *)
+    show_help
+    ;;
+esac
