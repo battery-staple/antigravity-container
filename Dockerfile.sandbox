@@ -111,7 +111,33 @@ RUN GO_ARCH=${TARGETARCH:-arm64} && \
     rm /tmp/go.tar.gz
 
 # ------------------------------------------------------------------------------
-# 5. Antigravity Language Server Backend
+# 5. Java & Kotlin Toolchains (OpenJDK 21, Kotlin, Gradle, Linters)
+# ------------------------------------------------------------------------------
+# Installs:
+# - OpenJDK 21 (LTS) Development Kit
+# - Kotlin CLI Compiler v2.1.10 (kotlinc, kotlin, kotlinc-jvm)
+# - Gradle Build Automation v8.12.1
+# - ktlint (Kotlin linter / code formatter)
+# - google-java-format (Google Java style formatter)
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-21-jdk \
+    && ln -sfn /usr/lib/jvm/java-21-openjdk-* /usr/lib/jvm/java-21 \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://github.com/JetBrains/kotlin/releases/download/v2.1.10/kotlin-compiler-2.1.10.zip -o /tmp/kotlin.zip \
+    && unzip -q /tmp/kotlin.zip -d /opt \
+    && rm /tmp/kotlin.zip \
+    && curl -fsSL https://services.gradle.org/distributions/gradle-8.12.1-bin.zip -o /tmp/gradle.zip \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && ln -s /opt/gradle-8.12.1 /opt/gradle \
+    && rm /tmp/gradle.zip \
+    && curl -fsSL https://github.com/pinterest/ktlint/releases/download/1.5.0/ktlint -o /usr/local/bin/ktlint \
+    && chmod +x /usr/local/bin/ktlint \
+    && mkdir -p /usr/local/lib/google-java-format \
+    && curl -fsSL https://github.com/google/google-java-format/releases/download/v1.25.2/google-java-format-1.25.2-all-deps.jar -o /usr/local/lib/google-java-format/google-java-format.jar \
+    && printf '#!/bin/bash\nexec java -jar /usr/local/lib/google-java-format/google-java-format.jar "$@"\n' > /usr/local/bin/google-java-format \
+    && chmod +x /usr/local/bin/google-java-format
+
+# ------------------------------------------------------------------------------
+# 6. Antigravity Language Server Backend
 # ------------------------------------------------------------------------------
 # Downloads official Antigravity distribution package, extracts the Linux
 # language_server binary, and installs it to /usr/local/bin/language_server.
@@ -134,7 +160,7 @@ RUN LS_ARCH=${TARGETARCH:-arm64} && \
     rm -rf "$TEMP_DIR"
 
 # ------------------------------------------------------------------------------
-# 6. Developer User & Permission Setup
+# 7. Developer User & Permission Setup
 # ------------------------------------------------------------------------------
 # Configure a dedicated non-root developer user with matching host UID/GID to
 # ensure seamless file ownership over bind-mounted workspace files.
@@ -155,13 +181,14 @@ RUN if getent group $USER_GID >/dev/null 2>&1; then \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
 # ------------------------------------------------------------------------------
-# 7. Persistent Directories & Ownership
+# 8. Persistent Directories & Ownership
 # ------------------------------------------------------------------------------
 # Pre-create all required directory hierarchies for the developer user:
 # - /workspace: Mount target for the host project directory (via VirtioFS)
 # - /home/$USERNAME/.gemini/antigravity: Antigravity agent state & logs
 # - /home/$USERNAME/.npm-global: Rootless global npm package installations
 # - /home/$USERNAME/go/bin: User Go binaries
+# - /home/$USERNAME/.gradle: Gradle dependency & build cache
 # - /var/run/host-exec: Host-Exec bridge socket directory
 # - /etc/antigravity/customizations: Image templates for agent rules & skills
 RUN mkdir -p \
@@ -169,22 +196,25 @@ RUN mkdir -p \
     /home/$USERNAME/.gemini/antigravity \
     /home/$USERNAME/.npm-global \
     /home/$USERNAME/go/bin \
+    /home/$USERNAME/.gradle \
     /var/run/host-exec \
     /etc/antigravity/customizations \
     && chown -R $USER_UID:$USER_GID /workspace /home/$USERNAME /var/run/host-exec
 
 # ------------------------------------------------------------------------------
-# 8. Environment Variables for Developer User
+# 9. Environment Variables for Developer User
 # ------------------------------------------------------------------------------
-# Configure paths so global tools installed via npm, pip, cargo, and go
+# Configure paths so global tools installed via npm, pip, cargo, go, kotlin, and gradle
 # are immediately accessible in interactive subshells without root privileges.
+ENV JAVA_HOME="/usr/lib/jvm/java-21"
+ENV GRADLE_USER_HOME="/home/developer/.gradle"
 ENV NPM_CONFIG_PREFIX="/home/developer/.npm-global"
 ENV GOPATH="/home/developer/go"
-ENV PATH="/home/developer/go/bin:/home/developer/.npm-global/bin:/usr/local/go/bin:/home/developer/.cargo/bin:/home/developer/.local/bin:$PATH"
+ENV PATH="/opt/kotlinc/bin:/opt/gradle/bin:/home/developer/go/bin:/home/developer/.npm-global/bin:/usr/local/go/bin:/home/developer/.cargo/bin:/home/developer/.local/bin:$PATH"
 ENV WORKSPACE="/workspace"
 
 # ------------------------------------------------------------------------------
-# 9. Agent Customizations & Host Bridge Installation
+# 10. Agent Customizations & Host Bridge Installation
 # ------------------------------------------------------------------------------
 # Copy agent environment awareness rule and host-exec skill into image templates
 COPY customizations /etc/antigravity/customizations
@@ -196,7 +226,7 @@ COPY bin/xdg-open /usr/local/bin/xdg-open
 RUN chmod +x /usr/local/bin/sandbox-entrypoint.sh /usr/local/bin/host-exec /usr/local/bin/xdg-open
 
 # ------------------------------------------------------------------------------
-# 10. Runtime Execution Context
+# 11. Runtime Execution Context
 # ------------------------------------------------------------------------------
 WORKDIR /workspace
 USER $USERNAME

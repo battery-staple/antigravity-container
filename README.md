@@ -65,7 +65,17 @@ The container image automatically downloads and bundles the Linux `language_serv
 ## Toolchain & Package Management
 
 ### Declarative Toolchains (`Dockerfile.sandbox`)
-System libraries and base compilers are defined in [`Dockerfile.sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/Dockerfile.sandbox). To add packages (e.g. `cmake`, `llvm`, `ffmpeg`), edit `Dockerfile.sandbox` and run:
+System libraries and base compilers are defined in [`Dockerfile.sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/Dockerfile.sandbox). Pre-installed development toolchains include:
+- **Java**: OpenJDK 21 (LTS) (`javac`, `java`, `JAVA_HOME=/usr/lib/jvm/java-21`)
+- **Kotlin**: Kotlin CLI Compiler v2.1.10 (`kotlinc`, `kotlin`, `kotlinc-jvm`)
+- **Build Tools**: Gradle v8.12.1 (`gradle`, `GRADLE_USER_HOME=/home/developer/.gradle`)
+- **Linters & Formatters**: `ktlint` (Kotlin code style / linter) and `google-java-format` (Google Java style formatter)
+- **Node.js & JavaScript**: Node.js v22 (LTS), `npm`, `yarn`, `pnpm`, `bun`
+- **Go**: Go v1.23 (`go`, `GOPATH=/home/developer/go`)
+- **Python**: Python 3.12 (`python3`, `pip`, `venv`)
+- **C/C++**: `build-essential` (`gcc`, `g++`, `make`)
+
+To add further packages (e.g. `cmake`, `llvm`, `ffmpeg`), edit `Dockerfile.sandbox` and run:
 ```bash
 ./scripts/antigravity-sandbox build
 ```
@@ -74,6 +84,8 @@ System libraries and base compilers are defined in [`Dockerfile.sandbox`](file:/
 The `/home/developer` volume retains state across restarts:
 - `npm install -g <pkg>`: Installs to `~/.npm-global` without root and persists across container recreations.
 - `pip install --user <pkg>`: Installs to `~/.local` and persists across container recreations.
+- `~/.gradle`: Gradle dependency and build artifact caches persist automatically.
+- `~/go`: Go module cache and user binaries persist across container recreations.
 
 ---
 

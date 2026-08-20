@@ -9,7 +9,7 @@ echo "=========================================================="
 
 # Ensure permissions on persistent directories
 sudo chown $(id -u):$(id -g) /home/developer/.gemini/config/rules 2>/dev/null || sudo chmod 1777 /home/developer/.gemini/config/rules 2>/dev/null || true
-mkdir -p /home/developer/.gemini/antigravity /home/developer/.gemini/config /home/developer/.npm-global /workspace 2>/dev/null || true
+mkdir -p /home/developer/.gemini/antigravity /home/developer/.gemini/config /home/developer/.npm-global /home/developer/.gradle /workspace 2>/dev/null || true
 
 # Auto-seed agent customizations (container awareness rule and host-exec skill)
 if [ -d "/etc/antigravity/customizations" ]; then
