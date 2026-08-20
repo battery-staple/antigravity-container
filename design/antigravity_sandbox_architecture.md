@@ -334,9 +334,9 @@ The table below details all files implementing this architecture:
 
 | File Path | Description |
 | :--- | :--- |
-| [`Dockerfile.sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/Dockerfile.sandbox) | Hardened Ubuntu 24.04 image with Node.js 22, Go 1.23, Python 3, customizations, and user setup. |
+| [`Dockerfile.sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/Dockerfile.sandbox) | Hardened Ubuntu 24.04 image with Node.js 22, Go 1.23, Python 3, built-in Antigravity language_server, customizations, and user setup. |
 | [`docker-compose.yml`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/docker-compose.yml) | Service definition, VirtioFS bind mounts, `tmpfs` rules overlay, host-rules staging, shared brain volume, dev ports (3000-3005, 5173, 8080, 8081), and shm_size (2gb). |
-| [`scripts/antigravity-sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/antigravity-sandbox) | Unified CLI tool (`start`, `stop`, `restart`, `build`, `app`, `host-bridge`, `status`, `shell`). |
+| [`scripts/antigravity-sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/antigravity-sandbox) | Unified CLI tool (`start`, `stop`, `restart`, `build`, `app`, `host-bridge`, `status`, `workspace`). |
 | [`security/entrypoint.sh`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/security/entrypoint.sh) | Container entrypoint auto-seeding customizations, performing tmpfs shadow-merge for rules, and launching language server. |
 | [`customizations/rules/container-environment.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/customizations/rules/container-environment.md) | Agent rule explaining container environment and impunity. |
 | [`customizations/skills/host-exec/SKILL.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/customizations/skills/host-exec/SKILL.md) | Agent skill runbook for invoking whitelisted host binaries via `host-exec`. |

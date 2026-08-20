@@ -30,10 +30,7 @@ ln -sf $(pwd)/scripts/antigravity-sandbox /usr/local/bin/antigravity-sandbox
 # Whitelist your project workspace (defaults to current directory if omitted)
 antigravity-sandbox workspace add $(pwd)
 
-# (Optional) Enable the In-Container Web UI & Language Server daemon with one command:
-antigravity-sandbox download-ls
-
-# Start the sandbox
+# Start the sandbox (automatically builds image and launches Language Server)
 antigravity-sandbox start
 ```
 
@@ -44,52 +41,15 @@ antigravity-sandbox start
 
 ---
 
-## Operating Modes
+## Built-In Language Server & Web UI (`https://localhost:58432`)
 
-The sandbox operates in two modes:
+The container image automatically downloads and bundles the Linux `language_server` binary directly into `/usr/local/bin/language_server` at build time. When you start the container, the Antigravity Language Server daemon and Web UI are active immediately:
 
-### Mode 1: Isolated Dev Container & Shell (Ready Out-of-the-Box)
-If you do not supply an in-container language server binary, the container runs in **Standby Mode**:
-- **Antigravity IDE Integration**: In Antigravity IDE, press <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> $\rightarrow$ **`Dev Containers: Attach to Running Container...`** $\rightarrow$ select **`antigravity-sandbox`**. All agent commands, compilers, and tools will execute inside the isolated container while code is edited natively on macOS.
-- **Interactive Shell**:
+- **Web UI**: Navigate to `https://localhost:58432` in any browser.
+- **Native App**: Launch `/Applications/Antigravity.app` connected to the sandbox via:
   ```bash
-  ./scripts/antigravity-sandbox shell
+  antigravity-sandbox app
   ```
-
----
-
-### Mode 2: In-Container Web UI & Language Server Daemon (`https://localhost:58432`)
-
-To host the full Antigravity Web UI and Language Server daemon inside the Docker container, a Linux ELF `language_server` binary is placed in a single canonical location:
-- **Host Location**: `~/.antigravity-sandbox/bin/language_server`
-- **Container Path**: `/home/developer/.antigravity-bin/language_server`
-
-#### Option 1: Automated Download & Extraction (Recommended)
-Use the built-in downloader to automatically fetch the official Antigravity distribution package, extract `language_server`, and discard the remaining archive:
-```bash
-# Automatically downloads official release and extracts language_server:
-./scripts/antigravity-sandbox download-ls
-
-# Or pass a custom release URL / internal package:
-./scripts/antigravity-sandbox download-ls --url <linux-package-url>
-```
-
-#### Option 2: Manual Placement
-1. Download the Linux package for your architecture (**Linux ARM64** for Apple Silicon, **Linux x64** for Intel) from [antigravity.google/download](https://antigravity.google/download).
-2. Extract the package and place the `language_server` binary at:
-   ```bash
-   mkdir -p ~/.antigravity-sandbox/bin
-   cp /path/to/extracted/language_server ~/.antigravity-sandbox/bin/language_server
-   chmod +x ~/.antigravity-sandbox/bin/language_server
-   ./scripts/antigravity-sandbox restart
-   ```
-
-3. **Access the Web UI**:
-   - Navigate to `https://localhost:58432` in any browser.
-   - Or launch the native desktop app:
-     ```bash
-     ./scripts/antigravity-sandbox app
-     ```
 
 ---
 

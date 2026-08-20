@@ -9,7 +9,7 @@ echo "=========================================================="
 
 # Ensure permissions on persistent directories
 sudo chown $(id -u):$(id -g) /home/developer/.gemini/config/rules 2>/dev/null || sudo chmod 1777 /home/developer/.gemini/config/rules 2>/dev/null || true
-mkdir -p /home/developer/.gemini/antigravity /home/developer/.gemini/config /home/developer/.antigravity-bin /home/developer/.npm-global /workspace 2>/dev/null || true
+mkdir -p /home/developer/.gemini/antigravity /home/developer/.gemini/config /home/developer/.npm-global /workspace 2>/dev/null || true
 
 # Auto-seed agent customizations (container awareness rule and host-exec skill)
 if [ -d "/etc/antigravity/customizations" ]; then
@@ -34,47 +34,23 @@ if [ -d "/etc/antigravity/customizations" ]; then
     fi
 fi
 
-if [ "$1" = "start-ls" ]; then
+if [ "$#" -eq 0 ]; then
     echo "[Runtime] Launching Antigravity Language Server Daemon..."
+    echo "[Runtime] Bridging port 58432 (0.0.0.0) -> language_server (127.0.0.1:58433)..."
+    socat TCP-LISTEN:58432,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:58433 2>/dev/null &
     
-    # Check for Linux language_server binary in the canonical location
-    LS_BIN="/home/developer/.antigravity-bin/language_server"
-
-    if [ -f "$LS_BIN" ]; then
-        chmod +x "$LS_BIN" 2>/dev/null || true
-    fi
-
-    if [ -f "$LS_BIN" ] && [ -x "$LS_BIN" ]; then
-        if "$LS_BIN" --help 2>&1 | grep -E -q -- "-+standalone"; then
-            echo "[Runtime] Bridging port 58432 (0.0.0.0) -> language_server (127.0.0.1:58433)..."
-            socat TCP-LISTEN:58432,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:58433 2>/dev/null &
-            
-            echo "[Runtime] Executing Language Server: $LS_BIN"
-            exec "$LS_BIN" \
-                --standalone \
-                --override_ide_name antigravity \
-                --subclient_type hub \
-                --override_ide_version 2.8.1 \
-                --override_user_agent_name antigravity \
-                --https_server_port 58433 \
-                --csrf_token "${CSRF_TOKEN:-antigravity-secure-token}" \
-                --app_data_dir antigravity \
-                --api_server_url https://generativelanguage.googleapis.com \
-                --cloud_code_endpoint https://daily-cloudcode-pa.googleapis.com
-        else
-            echo "[Runtime] Notice: Supplied binary does not support standalone server mode."
-            echo "[Runtime] Entering standby mode. Container is healthy and ready for agent commands / file sync."
-            exec tail -f /dev/null
-        fi
-    else
-        echo "[Runtime] =========================================================="
-        echo "[Runtime] Notice: Linux language_server binary not found at $LS_BIN."
-        echo "[Runtime] Entering standby mode. Container is healthy and ready for agent commands / file sync."
-        echo "[Runtime] To download and setup the binary, run: antigravity-sandbox download-ls"
-        echo "[Runtime] =========================================================="
-        # Keep container alive and provide interactive shell / daemon
-        exec tail -f /dev/null
-    fi
+    echo "[Runtime] Executing Language Server: /usr/local/bin/language_server"
+    exec /usr/local/bin/language_server \
+        --standalone \
+        --override_ide_name antigravity \
+        --subclient_type hub \
+        --override_ide_version 2.8.1 \
+        --override_user_agent_name antigravity \
+        --https_server_port 58433 \
+        --csrf_token "${CSRF_TOKEN:-antigravity-secure-token}" \
+        --app_data_dir antigravity \
+        --api_server_url https://generativelanguage.googleapis.com \
+        --cloud_code_endpoint https://daily-cloudcode-pa.googleapis.com
 else
     exec "$@"
 fi

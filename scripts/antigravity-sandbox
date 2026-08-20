@@ -24,7 +24,6 @@ LEGACY_WHITELIST_FILE="$DIR/config/whitelist.json"
 OVERRIDE_COMPOSE_FILE="$SANDBOX_DIR/docker-compose.override.yml"
 IPC_DIR="$SANDBOX_DIR/ipc"
 LOGS_DIR="$SANDBOX_DIR/logs"
-BIN_DIR="$SANDBOX_DIR/bin"
 
 function run_compose() {
   local compose_args=("-f" "$DIR/docker-compose.yml")
@@ -52,16 +51,14 @@ function show_help() {
   echo "  restart                             Restart the sandbox container"
   echo "  build                               Rebuild the sandbox container image (after Dockerfile edits)"
   echo "  status                              Display current sandbox status and resource usage"
-  echo "  shell                               Open an interactive bash shell inside the sandbox"
   echo "  app                                 Launch Antigravity Desktop App connected to Sandbox"
-  echo "  download-ls [options]               Download & install Linux language_server binary for Web UI"
   echo "  host-bridge                         Start the host binary execution bridge daemon"
   echo "  help                                Show this help message"
   echo "=========================================================="
 }
 
 function ensure_whitelist_config() {
-  mkdir -p "$SANDBOX_DIR" "$IPC_DIR" "$LOGS_DIR" "$BIN_DIR" "$HOME/.gemini/antigravity/brain" "$HOME/.gemini/config/rules" 2>/dev/null || true
+  mkdir -p "$SANDBOX_DIR" "$IPC_DIR" "$LOGS_DIR" "$HOME/.gemini/antigravity/brain" "$HOME/.gemini/config/rules" 2>/dev/null || true
   chmod 0700 "$IPC_DIR" 2>/dev/null || true
 
   python3 -c "
@@ -152,15 +149,6 @@ function is_container_running() {
   else
     return 1
   fi
-}
-
-function is_language_server_running() {
-  if is_container_running; then
-    if docker exec antigravity-sandbox pgrep -f "language_server" >/dev/null 2>&1; then
-      return 0
-    fi
-  fi
-  return 1
 }
 
 function reload_container_if_running() {
@@ -421,12 +409,7 @@ case "$COMMAND" in
 
     if is_container_running; then
       echo "[Sandbox] Antigravity Sandbox is already running."
-      if is_language_server_running; then
-        echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
-      else
-        echo "[Sandbox] Mode: Standby (ready for IDE Dev Containers & shell)."
-        echo "[Sandbox] (Web UI on port 58432 is inactive: Linux language_server binary not found)"
-      fi
+      echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
       cmd_workspace_list
       exit 0
     fi
@@ -446,7 +429,7 @@ except Exception:
 ")
 
     if [ "$NUM_WORKSPACES" -eq 0 ]; then
-      echo "[Sandbox] Starting Antigravity Sandbox in standby mode (0 workspaces mounted)..."
+      echo "[Sandbox] Starting Antigravity Sandbox (0 workspaces mounted)..."
       echo "[Sandbox] You can add workspaces anytime using: antigravity-sandbox workspace add <path>"
     else
       echo "[Sandbox] Starting Antigravity Sandbox with VirtioFS..."
@@ -454,17 +437,8 @@ except Exception:
     fi
 
     run_compose up -d
-    sleep 1
-    if is_language_server_running; then
-      echo "[Sandbox] Sandbox is running with Language Server daemon."
-      echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
-    else
-      echo "[Sandbox] Sandbox is running in Standby Mode (container healthy & ready)."
-      echo "[Sandbox] - Attach from Antigravity IDE: Command Palette -> 'Dev Containers: Attach to Running Container...'"
-      echo "[Sandbox] - Open terminal shell: antigravity-sandbox shell"
-      echo "[Sandbox] - To enable in-container Web UI (https://127.0.0.1:58432):"
-      echo "[Sandbox]   Place Linux ELF binary at ~/.antigravity-sandbox/bin/language_server and restart."
-    fi
+    echo "[Sandbox] Sandbox is running with Language Server daemon."
+    echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
     ;;
 
   stop)
@@ -476,13 +450,8 @@ except Exception:
     echo "[Sandbox] Restarting Sandbox..."
     generate_compose_override
     run_compose restart
-    sleep 1
-    if is_language_server_running; then
-      echo "[Sandbox] Sandbox is running with Language Server daemon."
-      echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
-    else
-      echo "[Sandbox] Sandbox is running in Standby Mode."
-    fi
+    echo "[Sandbox] Sandbox is running with Language Server daemon."
+    echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
     ;;
 
   build)
@@ -492,29 +461,18 @@ except Exception:
 
   status)
     run_compose ps
-    if is_language_server_running; then
+    if is_container_running; then
       echo "[Status] Language Server daemon: Active (Listening on https://127.0.0.1:58432)"
-    elif is_container_running; then
-      echo "[Status] Container Mode: Standby (Ready for Antigravity IDE Dev Containers / shell)"
-      echo "[Status] In-container Web UI (port 58432): Inactive (No Linux language_server binary found)"
     fi
     docker stats --no-stream antigravity-sandbox 2>/dev/null || true
     echo ""
     cmd_workspace_list
     ;;
 
-  shell)
-    docker exec -it antigravity-sandbox /bin/bash
-    ;;
-
   app)
     if ! is_container_running; then
       echo "[Antigravity] Starting sandbox container first..."
       "$DIR/scripts/antigravity-sandbox" start
-    fi
-    if ! is_language_server_running; then
-      echo "[Antigravity Warning] In-container language server is not active on port 58432."
-      echo "[Antigravity Warning] Place Linux language_server at ~/.antigravity-sandbox/bin/language_server to enable sandbox backend."
     fi
     echo "[Antigravity] Launching Native Desktop App connected to Sandbox (127.0.0.1:58432)..."
     APP_BIN="/Applications/Antigravity.app/Contents/MacOS/Antigravity"
@@ -530,10 +488,6 @@ except Exception:
   host-bridge)
     echo "[Bridge] Starting Host-Exec Daemon on macOS..."
     python3 "$DIR/bridge/host_exec_daemon.py"
-    ;;
-
-  download-ls|download|get-ls)
-    "$DIR/scripts/download-language-server.sh" "$@"
     ;;
 
   help|--help|-h)

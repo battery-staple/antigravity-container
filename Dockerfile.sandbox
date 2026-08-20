@@ -111,7 +111,30 @@ RUN GO_ARCH=${TARGETARCH:-arm64} && \
     rm /tmp/go.tar.gz
 
 # ------------------------------------------------------------------------------
-# 5. Developer User & Permission Setup
+# 5. Antigravity Language Server Backend
+# ------------------------------------------------------------------------------
+# Downloads official Antigravity distribution package, extracts the Linux
+# language_server binary, and installs it to /usr/local/bin/language_server.
+ARG TARGETARCH
+RUN LS_ARCH=${TARGETARCH:-arm64} && \
+    if [ "$LS_ARCH" = "amd64" ]; then \
+        LS_URL="https://storage.googleapis.com/antigravity-public/antigravity-hub/2.8.1-6512087774658560/linux-x64/Antigravity.tar.gz"; \
+    else \
+        LS_URL="https://storage.googleapis.com/antigravity-public/antigravity-hub/2.8.1-6512087774658560/linux-arm/Antigravity.tar.gz"; \
+    fi && \
+    TEMP_DIR=$(mktemp -d) && \
+    curl -fsSL "$LS_URL" -o "$TEMP_DIR/Antigravity.tar.gz" && \
+    tar -xzf "$TEMP_DIR/Antigravity.tar.gz" -C "$TEMP_DIR" && \
+    FOUND_BIN=$(find "$TEMP_DIR" -type f \( -name "language_server" -o -name "language_server_linux_arm" -o -name "language_server_linux_x64" -o -name "language_server_linux_arm64" \) | head -n 1) && \
+    if [ -z "$FOUND_BIN" ]; then \
+        FOUND_BIN=$(find "$TEMP_DIR" -type f -exec grep -lI '^.ELF' {} + | head -n 1); \
+    fi && \
+    cp "$FOUND_BIN" /usr/local/bin/language_server && \
+    chmod +x /usr/local/bin/language_server && \
+    rm -rf "$TEMP_DIR"
+
+# ------------------------------------------------------------------------------
+# 6. Developer User & Permission Setup
 # ------------------------------------------------------------------------------
 # Configure a dedicated non-root developer user with matching host UID/GID to
 # ensure seamless file ownership over bind-mounted workspace files.
@@ -132,7 +155,7 @@ RUN if getent group $USER_GID >/dev/null 2>&1; then \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
 # ------------------------------------------------------------------------------
-# 6. Persistent Directories & Ownership
+# 7. Persistent Directories & Ownership
 # ------------------------------------------------------------------------------
 # Pre-create all required directory hierarchies for the developer user:
 # - /workspace: Mount target for the host project directory (via VirtioFS)
@@ -144,7 +167,6 @@ RUN if getent group $USER_GID >/dev/null 2>&1; then \
 RUN mkdir -p \
     /workspace \
     /home/$USERNAME/.gemini/antigravity \
-    /home/$USERNAME/.antigravity-bin \
     /home/$USERNAME/.npm-global \
     /home/$USERNAME/go/bin \
     /var/run/host-exec \
@@ -152,7 +174,7 @@ RUN mkdir -p \
     && chown -R $USER_UID:$USER_GID /workspace /home/$USERNAME /var/run/host-exec
 
 # ------------------------------------------------------------------------------
-# 7. Environment Variables for Developer User
+# 8. Environment Variables for Developer User
 # ------------------------------------------------------------------------------
 # Configure paths so global tools installed via npm, pip, cargo, and go
 # are immediately accessible in interactive subshells without root privileges.
@@ -162,7 +184,7 @@ ENV PATH="/home/developer/go/bin:/home/developer/.npm-global/bin:/usr/local/go/b
 ENV WORKSPACE="/workspace"
 
 # ------------------------------------------------------------------------------
-# 8. Agent Customizations & Host Bridge Installation
+# 9. Agent Customizations & Host Bridge Installation
 # ------------------------------------------------------------------------------
 # Copy agent environment awareness rule and host-exec skill into image templates
 COPY customizations /etc/antigravity/customizations
@@ -174,7 +196,7 @@ COPY bin/xdg-open /usr/local/bin/xdg-open
 RUN chmod +x /usr/local/bin/sandbox-entrypoint.sh /usr/local/bin/host-exec /usr/local/bin/xdg-open
 
 # ------------------------------------------------------------------------------
-# 9. Runtime Execution Context
+# 10. Runtime Execution Context
 # ------------------------------------------------------------------------------
 WORKDIR /workspace
 USER $USERNAME
@@ -183,4 +205,3 @@ USER $USERNAME
 EXPOSE 58432
 
 ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint.sh"]
-CMD ["start-ls"]
