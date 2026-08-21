@@ -58,7 +58,8 @@ function show_help() {
 }
 
 function ensure_whitelist_config() {
-  mkdir -p "$SANDBOX_DIR" "$IPC_DIR" "$LOGS_DIR" "$HOME/.gemini/antigravity/brain" "$HOME/.gemini/config/rules" 2>/dev/null || true
+  local gemini_host_dir="${HOST_GEMINI_DIR:-$HOME/.gemini}"
+  mkdir -p "$SANDBOX_DIR" "$IPC_DIR" "$LOGS_DIR" "$gemini_host_dir/antigravity/brain" "$gemini_host_dir/sandbox-tmp" "$gemini_host_dir/config/rules" 2>/dev/null || true
   chmod 0700 "$IPC_DIR" 2>/dev/null || true
 
   python3 -c "

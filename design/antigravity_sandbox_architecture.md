@@ -119,6 +119,11 @@ The host project directory is bind-mounted directly to `/workspace` inside the c
 On macOS, user accounts typically possess UID `501` and GID `20` (`staff`). Inside the Linux container, the user is `developer` (UID `1000`).
 VirtioFS and Docker Compose automatically normalize UID/GID mappings, ensuring files created by the container inherit the host developer's ownership with zero `Permission Denied` errors.
 
+### 4.3 Same-Mount Atomic Renames & The Cross-Device Invariant (`EXDEV`)
+Antigravity's Go backend (`language_server`) uses atomic file operations (e.g. `os.CreateTemp` followed by `os.Rename`) to commit critical state files such as conversation summaries (`agyhub_summaries_proto.pb`) and state protobufs without corruption.
+- **The Failure Mode**: In Linux, the `rename()` syscall cannot move files across different filesystem mount boundaries. If `TMPDIR` defaults to `/tmp` (which resides on the container rootfs `overlayfs`), renaming a temporary file to `/home/developer/.gemini/` (which resides on the VirtioFS host bind mount) fails with **`EXDEV` (Invalid cross-device link)**. This caused in-memory summaries to stream to the live UI while silently failing to commit to disk, resulting in lost conversation history upon container recreation.
+- **The Architectural Fix**: `security/entrypoint.sh` explicitly creates and exports `export TMPDIR="/home/developer/.gemini/sandbox-tmp"`. By placing temporary staging files on the exact same VirtioFS mount device as the Antigravity application data directory, atomic `os.Rename()` calls succeed as native same-filesystem operations.
+
 ---
 
 ## 5. Sandboxed Command Execution & Blast Radius Containment
