@@ -91,7 +91,7 @@ The `/home/developer` volume retains state across restarts:
 
 ## Workspace Whitelisting & Multi-Project Management
 
-Workspaces are persisted globally in `~/.antigravity-sandbox/whitelist.json` and mounted directly to their **exact host absolute paths** inside the container with sub-millisecond VirtioFS sync.
+Workspaces are persisted globally in `~/.antigravity-sandbox/whitelist.yaml` and mounted directly to their **exact host absolute paths** inside the container with sub-millisecond VirtioFS sync.
 
 ```bash
 # Add a workspace to whitelist (defaults to current working directory)
@@ -118,8 +118,8 @@ To allow the sandboxed agent to run specific host macOS binaries (e.g. `xcodebui
    antigravity-sandbox host-bridge
    ```
    *(If the host bridge is not running when the agent executes `host-exec`, the agent will display a clear message requesting you to run this command).*
-2. Configure permissions in `~/.antigravity-sandbox/whitelist.json`.
-3. Commands with `"require_interactive_approval": true` will trigger a native macOS confirmation dialog before running.
+2. Configure permissions in `~/.antigravity-sandbox/whitelist.yaml`.
+3. Commands with `require_interactive_approval: true` will trigger a native macOS confirmation dialog before running.
 
 ---
 

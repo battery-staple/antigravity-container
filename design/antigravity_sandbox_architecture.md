@@ -189,7 +189,7 @@ flowchart LR
 
 ### 7.2 Unified Workspace Management
 
-Workspaces are persisted in `~/.antigravity-sandbox/whitelist.json` and managed directly via the CLI:
+Workspaces are persisted in `~/.antigravity-sandbox/whitelist.yaml` and managed directly via the CLI:
 
 ```bash
 # Add a workspace to the whitelist (defaults to current directory if omitted)
@@ -205,21 +205,17 @@ antigravity-sandbox workspace list
 antigravity-sandbox workspace remove /Users/rohengiralt/Documents/Personal/project-alpha
 ```
 
-### 7.3 Whitelist Policy (`~/.antigravity-sandbox/whitelist.json`)
-```json
-{
-  "allowed_workspaces": [
-    "/Users/rohengiralt/Documents/Personal/project-alpha",
-    "/Users/rohengiralt/Work/ClientA/project-beta"
-  ],
-  "allowed_commands": {
-    "xcodebuild": {
-      "binary_path": "/usr/bin/xcodebuild",
-      "allowed_args_regex": "^(-version|-showsdks|-list.*)$",
-      "require_interactive_approval": false
-    }
-  }
-}
+### 7.3 Whitelist Policy (`~/.antigravity-sandbox/whitelist.yaml`)
+```yaml
+allowed_workspaces:
+  - /Users/rohengiralt/Documents/Personal/project-alpha
+  - /Users/rohengiralt/Work/ClientA/project-beta
+
+allowed_commands:
+  xcodebuild:
+    binary_path: /usr/bin/xcodebuild
+    allowed_args_regex: ^(-version|-showsdks|-list.*)$
+    require_interactive_approval: false
 ```
 
 ---
@@ -233,7 +229,7 @@ Certain workflows require tools available only on the host macOS (e.g. `xcodebui
 flowchart TB
     subgraph Host_macOS ["Host macOS System"]
         DAEMON["Host-Exec Daemon (bridge/host_exec_daemon.py:58433)"]
-        POLICY["Whitelist Policy (~/.antigravity-sandbox/whitelist.json)"]
+        POLICY["Whitelist Policy (~/.antigravity-sandbox/whitelist.yaml)"]
         PROMPT["Native AppleScript Approval Dialog"]
         HOST_BIN["Host Binaries (xcodebuild, open -a Simulator, git-credential-osxkeychain)"]
 
@@ -251,27 +247,21 @@ flowchart TB
     CLIENT <==>|"HMAC-SHA256 TCP Bridge (host.docker.internal:58433)"| DAEMON
 ```
 
-### 8.2 Whitelist Policy (`~/.antigravity-sandbox/whitelist.json`)
-```json
-{
-  "allowed_commands": {
-    "xcodebuild": {
-      "binary_path": "/usr/bin/xcodebuild",
-      "allowed_args_regex": "^(-version|-showsdks|-list.*)$",
-      "require_interactive_approval": false
-    },
-    "simulator": {
-      "binary_path": "/usr/bin/open",
-      "allowed_args_regex": "^-a Simulator$",
-      "require_interactive_approval": false
-    },
-    "git-host-credential": {
-      "binary_path": "/usr/bin/git",
-      "allowed_args_regex": "^credential-osxkeychain (get|store|erase)$",
-      "require_interactive_approval": true
-    }
-  }
-}
+### 8.2 Whitelist Policy (`~/.antigravity-sandbox/whitelist.yaml`)
+```yaml
+allowed_commands:
+  xcodebuild:
+    binary_path: /usr/bin/xcodebuild
+    allowed_args_regex: ^(-version|-showsdks|-list.*)$
+    require_interactive_approval: false
+  simulator:
+    binary_path: /usr/bin/open
+    allowed_args_regex: ^-a Simulator$
+    require_interactive_approval: false
+  git-host-credential:
+    binary_path: /usr/bin/git
+    allowed_args_regex: ^credential-osxkeychain (get|store|erase)$
+    require_interactive_approval: true
 ```
 
 ---
@@ -330,7 +320,7 @@ To allow the container agent to inherit global user rules from macOS while preve
   - Documents exact `host-exec <command> [args...]` usage and path translation.
   - Explains the interactive AppleScript approval dialog flow.
   - Details remediation steps when the host bridge daemon is offline (asking the user to run `antigravity-sandbox host-bridge`).
-  - Guides the agent on how to prompt the user if a command is blocked by `~/.antigravity-sandbox/whitelist.json`.
+  - Guides the agent on how to prompt the user if a command is blocked by `~/.antigravity-sandbox/whitelist.yaml`.
 
 ---
 
@@ -348,7 +338,7 @@ The table below details all files implementing this architecture:
 | [`customizations/skills/host-exec/SKILL.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/customizations/skills/host-exec/SKILL.md) | Agent skill runbook for invoking whitelisted host binaries via `host-exec`. |
 | [`bridge/host_exec_daemon.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/bridge/host_exec_daemon.py) | Host daemon listening on port 58433, enforcing whitelist policies with AppleScript dialogs. |
 | [`bin/host-exec`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/bin/host-exec) | Guest client generating canonical HMAC-SHA256 signatures for host binary execution. |
-| `~/.antigravity-sandbox/whitelist.json` | Whitelist policy defining allowed host binaries, argument regexes, and approval rules. |
+| `~/.antigravity-sandbox/whitelist.yaml` | Whitelist policy defining allowed host binaries, argument regexes, and approval rules. |
 | [`README.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/README.md) | User runbook and operational quickstart. |
 | [`design/future/snapshots_future_improvement.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/design/future/snapshots_future_improvement.md) | Optional future improvement document for adding instant container snapshots and rollbacks. |
 | [`design/future/egress_filtering_future_improvement.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/design/future/egress_filtering_future_improvement.md) | Optional future improvement document for adding a Squid egress proxy sidecar. |

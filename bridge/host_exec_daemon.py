@@ -8,6 +8,7 @@ Validates HMAC authentication tokens and whitelist policy before executing comma
 import os
 import sys
 import json
+import yaml
 import re
 import hmac
 import hashlib
@@ -22,7 +23,7 @@ IPC_DIR = os.path.join(STATE_DIR, "ipc")
 LOGS_DIR = os.path.join(STATE_DIR, "logs")
 SOCKET_PATH = os.path.join(IPC_DIR, "host-exec.sock")
 AUTH_SECRET_PATH = os.path.join(IPC_DIR, "auth_secret.key")
-WHITELIST_PATH = os.path.join(STATE_DIR, "whitelist.json")
+WHITELIST_PATH = os.path.join(STATE_DIR, "whitelist.yaml")
 
 # Ensure required directories exist
 os.makedirs(IPC_DIR, exist_ok=True)
@@ -67,32 +68,44 @@ def get_or_create_secret():
 
     return secret
 
+def _read_yaml_config(filepath):
+    try:
+        with open(filepath, "r") as f:
+            content = f.read().strip()
+        if not content:
+            return None
+        return yaml.safe_load(content)
+    except Exception as e:
+        logging.warning(f"Failed to parse {filepath}: {e}")
+        return None
+
 def load_whitelist():
     # 1. Custom env var override
     env_config = os.environ.get("ANTIGRAVITY_WHITELIST_CONFIG")
     if env_config and os.path.exists(env_config):
-        try:
-            with open(env_config, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"Failed to parse ANTIGRAVITY_WHITELIST_CONFIG ({env_config}): {e}")
+        cfg = _read_yaml_config(env_config)
+        if cfg:
+            return cfg
 
-    # 2. Global user config (~/.antigravity-sandbox/whitelist.json)
+    # 2. Global user config (~/.antigravity-sandbox/whitelist.yaml)
     if os.path.exists(WHITELIST_PATH):
-        try:
-            with open(WHITELIST_PATH, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"Failed to parse {WHITELIST_PATH}: {e}")
+        cfg = _read_yaml_config(WHITELIST_PATH)
+        if cfg:
+            return cfg
+
+    # 2b. Alternative extension (~/.antigravity-sandbox/whitelist.yml)
+    alt_yaml = os.path.join(STATE_DIR, "whitelist.yml")
+    if os.path.exists(alt_yaml):
+        cfg = _read_yaml_config(alt_yaml)
+        if cfg:
+            return cfg
 
     # 3. Default template from repository
-    repo_default = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "whitelist.default.json"))
-    if os.path.exists(repo_default):
-        try:
-            with open(repo_default, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
+    repo_default_yaml = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "whitelist.default.yaml"))
+    if os.path.exists(repo_default_yaml):
+        cfg = _read_yaml_config(repo_default_yaml)
+        if cfg:
+            return cfg
 
     # 4. Default policy fallback
     return {
@@ -211,7 +224,7 @@ def handle_client(conn, secret, whitelist):
         policies = whitelist.get("allowed_commands", {})
         if command_name not in policies:
             logging.warning(f"Command '{command_name}' is not in host whitelist!")
-            conn.sendall((json.dumps({"status": "error", "message": f"Command '{command_name}' is not whitelisted on host (~/.antigravity-sandbox/whitelist.json)"}) + "\n").encode("utf-8"))
+            conn.sendall((json.dumps({"status": "error", "message": f"Command '{command_name}' is not whitelisted on host (~/.antigravity-sandbox/whitelist.yaml)"}) + "\n").encode("utf-8"))
             return
 
         policy = policies[command_name]
@@ -222,7 +235,7 @@ def handle_client(conn, secret, whitelist):
 
         if not (re.fullmatch(args_regex, args_str) or re.fullmatch(args_regex, flat_args_str)):
             logging.warning(f"Arguments '{args_str}' violated policy regex: {args_regex}")
-            conn.sendall((json.dumps({"status": "error", "message": f"Command arguments '{args_str}' violated whitelist pattern ({args_regex}) in ~/.antigravity-sandbox/whitelist.json"}) + "\n").encode("utf-8"))
+            conn.sendall((json.dumps({"status": "error", "message": f"Command arguments '{args_str}' violated whitelist pattern ({args_regex}) in ~/.antigravity-sandbox/whitelist.yaml"}) + "\n").encode("utf-8"))
             return
 
         # Check if interactive approval is required

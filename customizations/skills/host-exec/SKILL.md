@@ -50,7 +50,7 @@ echo "host=github.com\nprotocol=https" | host-exec git credential-osxkeychain ge
 2. **HMAC-SHA256 Authentication**:
    - `host-exec` signs every request with a secret token shared between the host daemon and the container.
 3. **Interactive User Approval**:
-   - If a command is configured with `"require_interactive_approval": true` in `~/.antigravity-sandbox/whitelist.json`, a native macOS dialog will appear on the developer's screen with **Approve** / **Deny** buttons.
+   - If a command is configured with `require_interactive_approval: true` in `~/.antigravity-sandbox/whitelist.yaml`, a native macOS dialog will appear on the developer's screen with **Approve** / **Deny** buttons.
    - *Note*: If the command is waiting for user approval, do not spam repeated executions.
 
 ---
@@ -79,11 +79,11 @@ If a command fails with an error indicating the host bridge daemon is unreachabl
 
 ### Scenario B: Whitelist Policy Rejection
 If a command fails with an error such as:
-`[HOST-EXEC ERROR] Host Execution Failed: Command 'foo' is not in host whitelist (~/.antigravity-sandbox/whitelist.json)`
+`[HOST-EXEC ERROR] Host Execution Failed: Command 'foo' is not in host whitelist (~/.antigravity-sandbox/whitelist.yaml)`
 
 **Guidance for Agent**:
 1. Inform the user that the command `foo` (or its arguments) is not currently permitted in the host security policy.
-2. Direct the user to edit their `~/.antigravity-sandbox/whitelist.json` file on macOS to add the binary and allowed argument patterns if they wish to permit it.
+2. Direct the user to edit their `~/.antigravity-sandbox/whitelist.yaml` file on macOS to add the binary and allowed argument patterns if they wish to permit it.
 
 ### Scenario C: Interactive User Approval Denied
 If a command fails with:

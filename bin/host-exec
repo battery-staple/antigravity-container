@@ -170,7 +170,7 @@ try:
             print(
                 f"REMEDIATION STEPS FOR THE AGENT:\n"
                 f"1. Inform the user that '{cmd}' is not allowed by their current host security whitelist.\n"
-                f"2. Instruct the user to update 'allowed_commands' in '~/.antigravity-sandbox/whitelist.json' on their macOS host if they wish to permit it.\n"
+                f"2. Instruct the user to update 'allowed_commands' in '~/.antigravity-sandbox/whitelist.yaml' on their macOS host if they wish to permit it.\n"
                 f"================================================================================\n",
                 file=sys.stderr
             )

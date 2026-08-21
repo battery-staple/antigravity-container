@@ -4,10 +4,13 @@
 docker-compose.override.yml
 
 # Whitelist template is tracked, local overrides in ~/.antigravity-sandbox/
+config/whitelist.yaml
+config/whitelist.yml
 config/whitelist.json
-!config/whitelist.default.json
+!config/whitelist.default.yaml
 
-# Python caches
+# Python virtualenvs and caches
+.venv/
 __pycache__/
 *.pyc
 
