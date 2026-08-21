@@ -211,7 +211,7 @@ def handle_client(conn, secret, whitelist):
         policies = whitelist.get("allowed_commands", {})
         if command_name not in policies:
             logging.warning(f"Command '{command_name}' is not in host whitelist!")
-            conn.sendall((json.dumps({"status": "error", "message": f"Command '{command_name}' is not whitelisted on host"}) + "\n").encode("utf-8"))
+            conn.sendall((json.dumps({"status": "error", "message": f"Command '{command_name}' is not whitelisted on host (~/.antigravity-sandbox/whitelist.json)"}) + "\n").encode("utf-8"))
             return
 
         policy = policies[command_name]
@@ -222,7 +222,7 @@ def handle_client(conn, secret, whitelist):
 
         if not (re.fullmatch(args_regex, args_str) or re.fullmatch(args_regex, flat_args_str)):
             logging.warning(f"Arguments '{args_str}' violated policy regex: {args_regex}")
-            conn.sendall((json.dumps({"status": "error", "message": "Command arguments violated whitelist pattern"}) + "\n").encode("utf-8"))
+            conn.sendall((json.dumps({"status": "error", "message": f"Command arguments '{args_str}' violated whitelist pattern ({args_regex}) in ~/.antigravity-sandbox/whitelist.json"}) + "\n").encode("utf-8"))
             return
 
         # Check if interactive approval is required
@@ -231,7 +231,7 @@ def handle_client(conn, secret, whitelist):
             approved = prompt_user_approval(command_name, args)
             if not approved:
                 logging.warning(f"Execution of '{full_cmd_str}' was denied by user.")
-                conn.sendall((json.dumps({"status": "error", "message": "Execution denied by user"}) + "\n").encode("utf-8"))
+                conn.sendall((json.dumps({"status": "error", "message": "Execution denied by user via macOS approval dialog"}) + "\n").encode("utf-8"))
                 return
             logging.info("Execution approved by user.")
 

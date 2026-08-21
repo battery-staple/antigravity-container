@@ -24,3 +24,4 @@ There are two distinct, independent security layers:
 ## 3. macOS Host Binary Execution (`host-exec`)
 - Because you are running inside Linux, macOS-specific binaries (e.g., `xcodebuild`, iOS Simulator `open -a Simulator`, macOS Keychain `git-credential-osxkeychain`, macOS notarization tools) cannot be executed directly via Linux shell commands.
 - Whenever you need to run macOS host tools, use the `host-exec` bridge tool (e.g., `host-exec xcodebuild -version`). Refer to the `host-exec` skill for complete details.
+- **Host Bridge Offline Remediation**: If `host-exec` returns `[HOST-EXEC ERROR] Host Bridge Daemon is not running on the macOS host`, do not retry in a loop. Ask the user to start the host bridge by running `antigravity-sandbox host-bridge` (or `./scripts/antigravity-sandbox host-bridge`) on their macOS host. Once the user confirms it is running, retry the command.

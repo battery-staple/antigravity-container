@@ -115,8 +115,9 @@ To allow the sandboxed agent to run specific host macOS binaries (e.g. `xcodebui
 
 1. Start the bridge daemon on your macOS host:
    ```bash
-   ./scripts/antigravity-sandbox host-bridge
+   antigravity-sandbox host-bridge
    ```
+   *(If the host bridge is not running when the agent executes `host-exec`, the agent will display a clear message requesting you to run this command).*
 2. Configure permissions in `~/.antigravity-sandbox/whitelist.json`.
 3. Commands with `"require_interactive_approval": true` will trigger a native macOS confirmation dialog before running.
 

@@ -55,11 +55,40 @@ echo "host=github.com\nprotocol=https" | host-exec git credential-osxkeychain ge
 
 ---
 
-## 4. Handling Whitelist Rejections
+## 4. Handling Host Bridge Errors & Remediation
 
-If a command fails with an error such as:
-`Host execution rejected: Command 'foo' is not in whitelist policy`
+### Scenario A: Host Bridge Daemon Is Not Running
+If a command fails with an error indicating the host bridge daemon is unreachable:
+```
+[HOST-EXEC ERROR] Host Bridge Daemon is not running on the macOS host
+```
 
 **Guidance for Agent**:
-1. Inform the user that the command `foo` is not currently whitelisted in the host security policy.
-2. Direct the user to edit their `~/.antigravity-sandbox/whitelist.json` file on macOS to whitelist the binary and allowed argument patterns if they wish to permit it.
+1. **Do not retry immediately**: The command cannot succeed while the daemon is offline.
+2. **Inform the user clearly**: Explain that the requested tool requires execution on the macOS host, but the host bridge daemon is not running.
+3. **Provide the exact remediation command**: Ask the user to start the daemon in their macOS terminal:
+   ```bash
+   antigravity-sandbox host-bridge
+   ```
+   *(or `./scripts/antigravity-sandbox host-bridge` from the repository directory)*
+4. **Wait for user confirmation**: Once the user confirms the host bridge is active, retry the command.
+
+---
+
+## 5. Handling Whitelist Rejections & Approvals
+
+### Scenario B: Whitelist Policy Rejection
+If a command fails with an error such as:
+`[HOST-EXEC ERROR] Host Execution Failed: Command 'foo' is not in host whitelist (~/.antigravity-sandbox/whitelist.json)`
+
+**Guidance for Agent**:
+1. Inform the user that the command `foo` (or its arguments) is not currently permitted in the host security policy.
+2. Direct the user to edit their `~/.antigravity-sandbox/whitelist.json` file on macOS to add the binary and allowed argument patterns if they wish to permit it.
+
+### Scenario C: Interactive User Approval Denied
+If a command fails with:
+`[HOST-EXEC ERROR] Host Execution Failed: Execution denied by user via native approval dialog`
+
+**Guidance for Agent**:
+1. The user explicitly chose **Deny** on the native macOS approval dialog.
+2. Do not retry the command without user instruction. Respect the user's decision and ask how they'd like to proceed.

@@ -74,18 +74,20 @@ if SOCKET_PATH and os.path.exists(SOCKET_PATH):
     except Exception:
         pass
 
-# 2. Attempt TCP connection to host (Primary in Docker container)
+# 2. Attempt TCP connection to host
 if not connected:
-    hosts_to_try = [HOST_EXEC_HOST]
+    hosts_to_try = []
+    if HOST_EXEC_HOST:
+        hosts_to_try.append(HOST_EXEC_HOST)
     if "host.docker.internal" not in hosts_to_try:
         hosts_to_try.append("host.docker.internal")
-    if "127.0.0.1" not in hosts_to_try:
+    if not os.environ.get("HOST_EXEC_HOST") and "127.0.0.1" not in hosts_to_try:
         hosts_to_try.append("127.0.0.1")
 
     for target_host in hosts_to_try:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.5)
+            s.settimeout(1.0)
             s.connect((target_host, HOST_EXEC_PORT))
             s.settimeout(None)
             sock = s
@@ -115,13 +117,25 @@ if not connected:
 
 if not connected or sock is None:
     print(
-        f"Host-Exec Error: Could not connect to host-exec daemon at {HOST_EXEC_HOST}:{HOST_EXEC_PORT} or {SOCKET_PATH}.\n"
-        f"Ensure 'antigravity-sandbox host-bridge' is running on your macOS host.",
+        f"\n================================================================================\n"
+        f"[HOST-EXEC ERROR] Host Bridge Daemon is not running on the macOS host\n"
+        f"================================================================================\n"
+        f"Failed to execute command: '{full_cmd_str}'\n"
+        f"Reason: Could not connect to host-exec daemon at {HOST_EXEC_HOST}:{HOST_EXEC_PORT} or {SOCKET_PATH}.\n\n"
+        f"REMEDIATION STEPS FOR THE AGENT:\n"
+        f"1. Do NOT retry this command in an automated loop.\n"
+        f"2. Inform the user that this command requires execution on their macOS host, but the host bridge daemon is not currently running.\n"
+        f"3. Ask the user to start the host bridge daemon by running the following command in their host macOS terminal:\n\n"
+        f"       antigravity-sandbox host-bridge\n\n"
+        f"   (or: ./scripts/antigravity-sandbox host-bridge)\n\n"
+        f"4. Once the user confirms the host bridge daemon is running, retry the command.\n"
+        f"================================================================================\n",
         file=sys.stderr
     )
     sys.exit(127)
 
 try:
+    sock.settimeout(30.0)
     sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
     
     chunks = []
@@ -133,13 +147,71 @@ try:
         if b"\n" in chunk:
             break
     
-    resp = json.loads(b"".join(chunks).decode("utf-8").strip())
+    raw_resp = b"".join(chunks).decode("utf-8", errors="replace").strip()
+    if not raw_resp:
+        raise ConnectionError("Host bridge daemon closed connection without returning a response.")
+    resp = json.loads(raw_resp)
+    
     if resp.get("status") == "success":
         sys.stdout.write(resp.get("stdout", ""))
         sys.stderr.write(resp.get("stderr", ""))
         sys.exit(resp.get("returncode", 0))
     else:
-        print(f"Host-Exec Error: {resp.get('message')}", file=sys.stderr)
+        error_msg = resp.get("message", "Unknown error from host bridge")
+        print(
+            f"\n================================================================================\n"
+            f"[HOST-EXEC ERROR] Host Execution Failed\n"
+            f"================================================================================\n"
+            f"Command: '{full_cmd_str}'\n"
+            f"Reason: {error_msg}\n",
+            file=sys.stderr
+        )
+        if "whitelist" in error_msg.lower() or "violated" in error_msg.lower():
+            print(
+                f"REMEDIATION STEPS FOR THE AGENT:\n"
+                f"1. Inform the user that '{cmd}' is not allowed by their current host security whitelist.\n"
+                f"2. Instruct the user to update 'allowed_commands' in '~/.antigravity-sandbox/whitelist.json' on their macOS host if they wish to permit it.\n"
+                f"================================================================================\n",
+                file=sys.stderr
+            )
+        elif "denied by user" in error_msg.lower():
+            print(
+                f"REMEDIATION STEPS FOR THE AGENT:\n"
+                f"1. The user denied the interactive approval dialog on macOS.\n"
+                f"2. Do not retry without explicit user confirmation.\n"
+                f"================================================================================\n",
+                file=sys.stderr
+            )
+        elif "authentication" in error_msg.lower() or "hmac" in error_msg.lower():
+            print(
+                f"REMEDIATION STEPS FOR THE AGENT:\n"
+                f"1. Ask the user to restart the host-bridge daemon on their macOS host:\n"
+                f"       antigravity-sandbox host-bridge\n"
+                f"================================================================================\n",
+                file=sys.stderr
+            )
+        else:
+            print(
+                f"REMEDIATION STEPS FOR THE AGENT:\n"
+                f"Check the error reason above and ask the user for assistance.\n"
+                f"================================================================================\n",
+                file=sys.stderr
+            )
         sys.exit(1)
+except Exception as e:
+    print(
+        f"\n================================================================================\n"
+        f"[HOST-EXEC ERROR] Host Bridge Communication Failure\n"
+        f"================================================================================\n"
+        f"Command: '{full_cmd_str}'\n"
+        f"Reason: {e}\n\n"
+        f"REMEDIATION STEPS FOR THE AGENT:\n"
+        f"1. Ask the user to ensure the host bridge daemon is running properly on macOS:\n"
+        f"       antigravity-sandbox host-bridge\n"
+        f"2. Retry after the user confirms it is running.\n"
+        f"================================================================================\n",
+        file=sys.stderr
+    )
+    sys.exit(127)
 finally:
     sock.close()

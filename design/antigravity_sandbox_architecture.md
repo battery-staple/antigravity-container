@@ -324,6 +324,7 @@ To allow the container agent to inherit global user rules from macOS while preve
   - Catalogs known macOS tools (`xcodebuild`, iOS Simulator, Keychain).
   - Documents exact `host-exec <command> [args...]` usage and path translation.
   - Explains the interactive AppleScript approval dialog flow.
+  - Details remediation steps when the host bridge daemon is offline (asking the user to run `antigravity-sandbox host-bridge`).
   - Guides the agent on how to prompt the user if a command is blocked by `~/.antigravity-sandbox/whitelist.json`.
 
 ---
