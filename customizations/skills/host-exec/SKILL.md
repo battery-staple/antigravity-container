@@ -1,6 +1,6 @@
 ---
 name: host-exec
-description: Use this skill to execute whitelisted macOS host binaries (e.g. xcodebuild, iOS Simulator, macOS Keychain, macOS notarization) from inside the Linux container sandbox using the host-exec bridge tool.
+description: Use this skill to inspect and execute whitelisted macOS host binaries from inside the Linux container sandbox using the host-exec bridge tool. Run `host-exec --list` to view all permitted host tools and policies.
 ---
 
 # Host-Exec Skill (Host Binary Execution Bridge)
@@ -9,12 +9,15 @@ Use this skill when you need to invoke tools or commands that only exist on the 
 
 ## 1. When to Use `host-exec`
 
-| Task / Tool Required | Direct Shell vs `host-exec` | Example Command |
-| :--- | :--- | :--- |
-| **Standard Linux / Dev Tools** (Node, Python, Go, Rust, Git, gcc, make, bash) | **Run directly in container** | `npm test`, `cargo build`, `python main.py` |
-| **Xcode & Apple SDKs** (`xcodebuild`, `xcrun`, `swiftc` for iOS/macOS) | **Use `host-exec`** | `host-exec xcodebuild -showsdks` |
-| **iOS Simulator** (Launch simulator app on macOS) | **Use `host-exec`** | `host-exec open -a Simulator` |
-| **macOS Keychain** (`git-credential-osxkeychain`, `security`) | **Use `host-exec`** | `host-exec git credential-osxkeychain get` |
+- **Standard Linux / Dev Tools** (Node, Python, Go, Rust, Git, gcc, make, bash, cargo, npm, pip): **Run directly in the container**.
+- **macOS-Specific Host Tools** (Xcode, Apple SDKs, iOS Simulator, macOS Keychain, macOS system utilities): **Use `host-exec`**.
+
+### Discovering Permitted Host Tools Live
+To inspect the current whitelist of available macOS tools, allowed argument patterns, descriptions, and approval requirements, run:
+
+```bash
+host-exec --list
+```
 
 ---
 
@@ -28,29 +31,32 @@ host-exec <command> [args...]
 
 ### Examples:
 ```bash
-# Check Xcode version on macOS
-host-exec xcodebuild -version
+# List all whitelisted host commands and policies
+host-exec --list
 
-# List available Xcode SDKs
+# Execute a whitelisted host command
+host-exec sw_vers
+
+# Run Xcode build tool on host
 host-exec xcodebuild -showsdks
 
 # Launch macOS iOS Simulator
 host-exec open -a Simulator
-
-# Retrieve credentials from macOS Keychain
-echo "host=github.com\nprotocol=https" | host-exec git credential-osxkeychain get
 ```
 
 ---
 
 ## 3. How the Bridge Works Under the Hood
 
-1. **Path Translation**:
-   - When you execute `host-exec` from a whitelisted directory, the host bridge automatically matches the container path with the host filesystem path.
-2. **HMAC-SHA256 Authentication**:
+1. **Single Source of Truth (`~/.antigravity-sandbox/whitelist.yaml`)**:
+   - The host daemon dynamically reads security policies from `~/.antigravity-sandbox/whitelist.yaml` on the host machine.
+   - Any modifications made by the user to the whitelist file take effect immediately without restarting daemons or containers.
+2. **Path Translation**:
+   - When you execute `host-exec` from a whitelisted workspace directory, the host bridge automatically matches the container path with the host filesystem path.
+3. **HMAC-SHA256 Authentication**:
    - `host-exec` signs every request with a secret token shared between the host daemon and the container.
-3. **Interactive User Approval**:
-   - If a command is configured with `require_interactive_approval: true` in `~/.antigravity-sandbox/whitelist.yaml`, a native macOS dialog will appear on the developer's screen with **Approve** / **Deny** buttons.
+4. **Interactive User Approval**:
+   - If a command is configured with `require_interactive_approval: true`, a native macOS dialog will appear on the developer's screen with **Approve** / **Deny** buttons.
    - *Note*: If the command is waiting for user approval, do not spam repeated executions.
 
 ---
@@ -78,12 +84,11 @@ If a command fails with an error indicating the host bridge daemon is unreachabl
 ## 5. Handling Whitelist Rejections & Approvals
 
 ### Scenario B: Whitelist Policy Rejection
-If a command fails with an error such as:
-`[HOST-EXEC ERROR] Host Execution Failed: Command 'foo' is not in host whitelist (~/.antigravity-sandbox/whitelist.yaml)`
+If a command fails with a whitelist rejection error, `host-exec` will automatically display the list of currently permitted commands and argument patterns.
 
 **Guidance for Agent**:
-1. Inform the user that the command `foo` (or its arguments) is not currently permitted in the host security policy.
-2. Direct the user to edit their `~/.antigravity-sandbox/whitelist.yaml` file on macOS to add the binary and allowed argument patterns if they wish to permit it.
+1. Review the output of `host-exec --list` to check if an alternative whitelisted command or argument format is available.
+2. If the tool is not whitelisted, inform the user and direct them to add the command to `allowed_commands` in `~/.antigravity-sandbox/whitelist.yaml` on their macOS host.
 
 ### Scenario C: Interactive User Approval Denied
 If a command fails with:

@@ -248,27 +248,44 @@ flowchart TB
 ```
 
 ### 8.2 Whitelist Policy (`~/.antigravity-sandbox/whitelist.yaml`)
+The whitelist file on macOS serves as the **single source of truth** for allowed host execution commands and policies. The daemon automatically hot-reloads this configuration on change without requiring a daemon restart:
+
 ```yaml
 allowed_commands:
   xcodebuild:
     binary_path: /usr/bin/xcodebuild
     allowed_args_regex: ^(-version|-showsdks|-list.*)$
     require_interactive_approval: false
+    description: Apple Xcode build system and SDK inspection
   simulator:
     binary_path: /usr/bin/open
     allowed_args_regex: ^-a Simulator$
     require_interactive_approval: false
-  git-host-credential:
+    description: Launch Apple iOS Simulator
+  git-credential-osxkeychain:
     binary_path: /usr/bin/git
     allowed_args_regex: ^credential-osxkeychain (get|store|erase)$
     require_interactive_approval: true
+    description: macOS Keychain Git credential helper
+  sw_vers:
+    binary_path: /usr/bin/sw_vers
+    allowed_args_regex: ^.*$
+    require_interactive_approval: false
+    description: macOS system version information
 ```
+
+### 8.3 Live Introspection (`host-exec --list`)
+The agent and user can inspect all active whitelisted host commands and policies at any time by executing:
+```bash
+host-exec --list
+```
+This queries the daemon over IPC and displays a live table with descriptions, binary paths, allowed argument regexes, and approval requirements.
 
 ---
 
-## 9. Agent Awareness & Customizations (Rule & Skill)
+## 9. Agent Awareness & Customizations (Evergreen Rule & Skill)
 
-To ensure the AI agent operates with complete clarity about its execution environment, the sandbox pre-provisions two native Antigravity customizations inside the container:
+To ensure the AI agent operates with complete clarity about its execution environment without brittle manual synchronization, the sandbox provisions two evergreen Antigravity customizations:
 
 ```mermaid
 flowchart TB
@@ -300,6 +317,7 @@ flowchart TB
   - Informs the agent that it runs inside an isolated Ubuntu 24.04 Linux container.
   - Confirms it has full impunity to run terminal commands, compile code, create temporary files, and install packages.
   - Informs the agent that macOS-specific tools cannot be run directly via shell, but must be executed using the `host-exec` tool via the `host-exec` skill.
+  - **Evergreen Design**: Does not hardcode specific tool names, eliminating any need to edit rules when whitelist policies change.
 
 ### 9.2 The `tmpfs` Shadow-Merge Pattern for Custom Rules
 To allow the container agent to inherit global user rules from macOS while preventing container-specific rules from leaking to the host:
@@ -316,11 +334,10 @@ To allow the container agent to inherit global user rules from macOS while preve
 ### 9.3 Host-Exec Runbook Skill (`customizations/skills/host-exec/SKILL.md`)
 - **Type**: On-Demand Progressive Disclosure Skill (seeded into `/home/developer/.gemini/antigravity/builtin/skills/host-exec/`).
 - **Function**:
-  - Catalogs known macOS tools (`xcodebuild`, iOS Simulator, Keychain).
-  - Documents exact `host-exec <command> [args...]` usage and path translation.
+  - Documents exact `host-exec <command> [args...]` usage, live discovery (`host-exec --list`), and path translation.
   - Explains the interactive AppleScript approval dialog flow.
   - Details remediation steps when the host bridge daemon is offline (asking the user to run `antigravity-sandbox host-bridge`).
-  - Guides the agent on how to prompt the user if a command is blocked by `~/.antigravity-sandbox/whitelist.yaml`.
+  - Guides the agent on handling whitelist rejections dynamically via `host-exec --list`.
 
 ---
 

@@ -22,6 +22,7 @@ There are two distinct, independent security layers:
 - **When to use `BypassSandbox: true`**: Use whenever a command needs internet/network access (e.g., `sudo apt-get install`, `npm install`, `pip install`, `cargo build` pulling crates, `curl`, `wget`) or needs to modify container system paths outside the workspace (e.g., `/etc`, `/usr`, `/var`).
 
 ## 3. macOS Host Binary Execution (`host-exec`)
-- Because you are running inside Linux, macOS-specific binaries (e.g., `xcodebuild`, iOS Simulator `open -a Simulator`, macOS Keychain `git-credential-osxkeychain`, macOS notarization tools) cannot be executed directly via Linux shell commands.
-- Whenever you need to run macOS host tools, use the `host-exec` bridge tool (e.g., `host-exec xcodebuild -version`). Refer to the `host-exec` skill for complete details.
+- Because you are operating inside an isolated Linux container, macOS-native host binaries cannot be executed directly via Linux shell commands.
+- Whenever you need to invoke macOS host tools or system utilities, use the `host-exec` bridge tool (`host-exec <command> [args...]`).
+- **Discovering Permitted Host Commands**: To inspect the currently active whitelist of host tools, permitted argument patterns, and approval policies, consult the `host-exec` skill or run `host-exec --list`.
 - **Host Bridge Offline Remediation**: If `host-exec` returns `[HOST-EXEC ERROR] Host Bridge Daemon is not running on the macOS host`, do not retry in a loop. Ask the user to start the host bridge by running `antigravity-sandbox host-bridge` (or `./scripts/antigravity-sandbox host-bridge`) on their macOS host. Once the user confirms it is running, retry the command.

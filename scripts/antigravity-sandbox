@@ -142,22 +142,26 @@ if not os.path.exists(cfg):
             'xcodebuild': {
                 'binary_path': '/usr/bin/xcodebuild',
                 'allowed_args_regex': '^' + '(-version|-showsdks|-list.*)' + '$',
-                'require_interactive_approval': False
+                'require_interactive_approval': False,
+                'description': 'Apple Xcode build system and SDK inspection'
             },
             'simulator': {
                 'binary_path': '/usr/bin/open',
                 'allowed_args_regex': '^-a Simulator$',
-                'require_interactive_approval': False
+                'require_interactive_approval': False,
+                'description': 'Launch Apple iOS Simulator'
             },
             'git-credential-osxkeychain': {
                 'binary_path': '/usr/bin/git',
                 'allowed_args_regex': '^credential-osxkeychain (get|store|erase)$',
-                'require_interactive_approval': True
+                'require_interactive_approval': True,
+                'description': 'macOS Keychain Git credential helper'
             },
             'sw_vers': {
                 'binary_path': '/usr/bin/sw_vers',
                 'allowed_args_regex': '^.*$',
-                'require_interactive_approval': False
+                'require_interactive_approval': False,
+                'description': 'macOS system version information'
             }
         }
     }

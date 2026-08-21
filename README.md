@@ -109,17 +109,22 @@ antigravity-sandbox workspace remove /path/to/project-alpha
 
 ---
 
-## Host-Exec Bridge (Host Binary Execution)
+## Host-Exec Bridge (macOS Host Tools)
 
-To allow the sandboxed agent to run specific host macOS binaries (e.g. `xcodebuild`, iOS Simulator, or Keychain):
+Because the container runs Linux, macOS-only tools (e.g., Xcode / `xcodebuild`, iOS Simulator, macOS Keychain) cannot execute directly in the sandbox. The optional Host-Exec bridge allows the agent to invoke specific macOS binaries on the host system under strict security guardrails.
 
-1. Start the bridge daemon on your macOS host:
-   ```bash
-   antigravity-sandbox host-bridge
-   ```
-   *(If the host bridge is not running when the agent executes `host-exec`, the agent will display a clear message requesting you to run this command).*
-2. Configure permissions in `~/.antigravity-sandbox/whitelist.yaml`.
-3. Commands with `require_interactive_approval: true` will trigger a native macOS confirmation dialog before running.
+### Starting the Daemon
+Start the bridge daemon in a terminal on your macOS host:
+```bash
+antigravity-sandbox host-bridge
+```
+
+### Configuration & Security
+- **Whitelist Policy (`~/.antigravity-sandbox/whitelist.yaml`)**: The single source of truth for allowed binaries and argument regex patterns. Changes reload automatically without restarting the daemon.
+- **Interactive Approvals**: Set `require_interactive_approval: true` on sensitive commands to prompt you with a native macOS confirmation dialog before the command runs.
+- **HMAC Authentication**: All execution requests are signed and verified with a local shared secret.
+
+*Inside the container, the agent automatically invokes permitted tools via `host-exec <command>` (and can inspect active policies with `host-exec --list`).*
 
 ---
 

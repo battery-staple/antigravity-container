@@ -5,18 +5,18 @@ Runs on macOS host listening on local Unix Domain Socket and TCP localhost.
 Validates HMAC authentication tokens and whitelist policy before executing commands on host.
 """
 
-import os
-import sys
-import json
-import yaml
-import re
-import hmac
 import hashlib
+import hmac
+import json
+import logging
+import os
+import re
+import select
+import shlex
 import socket
 import subprocess
-import logging
-import shlex
-import select
+import sys
+from typing import Any, Dict, List, Optional, Tuple
 
 STATE_DIR = os.environ.get("ANTIGRAVITY_STATE_DIR", os.path.expanduser("~/.antigravity-sandbox"))
 IPC_DIR = os.path.join(STATE_DIR, "ipc")
@@ -24,12 +24,14 @@ LOGS_DIR = os.path.join(STATE_DIR, "logs")
 SOCKET_PATH = os.path.join(IPC_DIR, "host-exec.sock")
 AUTH_SECRET_PATH = os.path.join(IPC_DIR, "auth_secret.key")
 WHITELIST_PATH = os.path.join(STATE_DIR, "whitelist.yaml")
+HOST_EXEC_BIND = os.environ.get("HOST_EXEC_BIND", "0.0.0.0")
+HOST_EXEC_PORT = int(os.environ.get("HOST_EXEC_PORT", "58433"))
 
-# Ensure required directories exist
+# Ensure required state directories exist
 os.makedirs(IPC_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-log_handlers = [logging.StreamHandler(sys.stdout)]
+log_handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
 try:
     log_handlers.append(logging.FileHandler(os.path.join(LOGS_DIR, "host_exec_daemon.log")))
 except Exception:
@@ -38,20 +40,27 @@ except Exception:
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=log_handlers
+    handlers=log_handlers,
 )
 
-def get_or_create_secret():
+# Global cache for dynamic hot-reloading
+_cached_whitelist: Optional[Dict[str, Any]] = None
+_last_loaded_mtime: float = 0.0
+_last_loaded_path: Optional[str] = None
+
+
+def get_or_create_secret() -> str:
+    """Load or generate the shared HMAC authentication secret."""
     try:
         os.makedirs(IPC_DIR, exist_ok=True)
         os.chmod(IPC_DIR, 0o700)
     except Exception as e:
-        logging.warning(f"Could not set permissions on {IPC_DIR}: {e}")
+        logging.warning("Could not set permissions on %s: %s", IPC_DIR, e)
 
     secret = None
     if os.path.exists(AUTH_SECRET_PATH):
         try:
-            with open(AUTH_SECRET_PATH, "r") as f:
+            with open(AUTH_SECRET_PATH, "r", encoding="utf-8") as f:
                 secret = f.read().strip()
         except Exception:
             pass
@@ -60,104 +69,148 @@ def get_or_create_secret():
         secret = os.urandom(32).hex()
 
     try:
-        with open(AUTH_SECRET_PATH, "w") as f:
+        with open(AUTH_SECRET_PATH, "w", encoding="utf-8") as f:
             f.write(secret)
         os.chmod(AUTH_SECRET_PATH, 0o600)
     except Exception as e:
-        logging.warning(f"Could not write auth secret to {AUTH_SECRET_PATH}: {e}")
+        logging.warning("Could not write auth secret to %s: %s", AUTH_SECRET_PATH, e)
 
     return secret
 
-def _read_yaml_config(filepath):
+
+def _read_yaml_config(filepath: str) -> Optional[Dict[str, Any]]:
+    """Parse a YAML configuration file safely."""
     try:
-        with open(filepath, "r") as f:
+        import yaml
+
+        with open(filepath, "r", encoding="utf-8") as f:
             content = f.read().strip()
         if not content:
             return None
         return yaml.safe_load(content)
     except Exception as e:
-        logging.warning(f"Failed to parse {filepath}: {e}")
+        logging.warning("Failed to parse %s: %s", filepath, e)
         return None
 
-def load_whitelist():
-    # 1. Custom env var override
+
+def get_command_description(name: str, policy: Dict[str, Any]) -> str:
+    """Return explicit description or derive a human-readable fallback."""
+    if policy.get("description"):
+        return str(policy["description"])
+    bin_path = policy.get("binary_path", "")
+    bin_name = os.path.basename(bin_path) if bin_path else name
+    regex = policy.get("allowed_args_regex", ".*")
+    if name != bin_name:
+        desc = f"Run '{bin_path}' via alias '{name}'"
+    else:
+        desc = f"Execute host binary '{bin_path}'"
+    if regex not in [".*", "^.*$", ""]:
+        clean_regex = regex.lstrip("^").rstrip("$")
+        desc += f" (allowed args: {clean_regex})"
+    return desc
+
+
+def load_whitelist() -> Dict[str, Any]:
+    """Dynamically load and hot-reload whitelist configuration from disk."""
+    global _cached_whitelist, _last_loaded_mtime, _last_loaded_path
+
+    candidate_paths = []
     env_config = os.environ.get("ANTIGRAVITY_WHITELIST_CONFIG")
-    if env_config and os.path.exists(env_config):
-        cfg = _read_yaml_config(env_config)
-        if cfg:
-            return cfg
+    if env_config:
+        candidate_paths.append(env_config)
 
-    # 2. Global user config (~/.antigravity-sandbox/whitelist.yaml)
-    if os.path.exists(WHITELIST_PATH):
-        cfg = _read_yaml_config(WHITELIST_PATH)
-        if cfg:
-            return cfg
+    candidate_paths.extend([
+        WHITELIST_PATH,
+        os.path.join(STATE_DIR, "whitelist.yml"),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "whitelist.default.yaml")),
+    ])
 
-    # 2b. Alternative extension (~/.antigravity-sandbox/whitelist.yml)
-    alt_yaml = os.path.join(STATE_DIR, "whitelist.yml")
-    if os.path.exists(alt_yaml):
-        cfg = _read_yaml_config(alt_yaml)
-        if cfg:
-            return cfg
+    active_path = None
+    for p in candidate_paths:
+        if os.path.exists(p):
+            active_path = p
+            break
 
-    # 3. Default template from repository
-    repo_default_yaml = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "whitelist.default.yaml"))
-    if os.path.exists(repo_default_yaml):
-        cfg = _read_yaml_config(repo_default_yaml)
-        if cfg:
-            return cfg
+    if active_path:
+        try:
+            mtime = os.path.getmtime(active_path)
+            if _cached_whitelist is not None and _last_loaded_path == active_path and mtime == _last_loaded_mtime:
+                return _cached_whitelist
+            cfg = _read_yaml_config(active_path)
+            if cfg:
+                _cached_whitelist = cfg
+                _last_loaded_mtime = mtime
+                _last_loaded_path = active_path
+                logging.info("Loaded whitelist policy from %s (mtime=%s)", active_path, mtime)
+                return cfg
+        except Exception as e:
+            logging.warning("Failed to read/stat whitelist at %s: %s", active_path, e)
 
-    # 4. Default policy fallback
+    if _cached_whitelist is not None:
+        return _cached_whitelist
+
+    # Default policy fallback
     return {
         "allowed_workspaces": [],
         "allowed_commands": {
             "xcodebuild": {
                 "binary_path": "/usr/bin/xcodebuild",
                 "allowed_args_regex": "^(-version|-showsdks|-list.*)$",
-                "require_interactive_approval": False
+                "require_interactive_approval": False,
+                "description": "Apple Xcode build system and SDK inspection",
             },
             "simulator": {
                 "binary_path": "/usr/bin/open",
                 "allowed_args_regex": "^-a Simulator$",
-                "require_interactive_approval": False
+                "require_interactive_approval": False,
+                "description": "Launch Apple iOS Simulator",
             },
             "git-credential-osxkeychain": {
                 "binary_path": "/usr/bin/git",
                 "allowed_args_regex": "^credential-osxkeychain (get|store|erase)$",
-                "require_interactive_approval": True
+                "require_interactive_approval": True,
+                "description": "macOS Keychain Git credential helper",
             },
             "sw_vers": {
                 "binary_path": "/usr/bin/sw_vers",
                 "allowed_args_regex": "^.*$",
-                "require_interactive_approval": False
-            }
-        }
+                "require_interactive_approval": False,
+                "description": "macOS system version information",
+            },
+        },
     }
 
-def verify_token(req_dict, token, secret):
-    # Primary: Canonical structured JSON HMAC verification
-    canonical_payload = json.dumps({
-        "command": req_dict.get("command"),
-        "args": req_dict.get("args", []),
-        "cwd": req_dict.get("cwd", "")
-    }, sort_keys=True, separators=(',', ':'))
-    expected_canonical = hmac.new(secret.encode("utf-8"), canonical_payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+def verify_token(req_dict: Dict[str, Any], token: str, secret: str) -> bool:
+    """Verify HMAC-SHA256 signature on request payload."""
+    canonical_payload = json.dumps(
+        {
+            "command": req_dict.get("command"),
+            "args": req_dict.get("args", []),
+            "cwd": req_dict.get("cwd", ""),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    expected_canonical = hmac.new(
+        secret.encode("utf-8"), canonical_payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
     if hmac.compare_digest(expected_canonical, token):
         return True
 
-    # Fallback: Support legacy flattened string HMAC for backward compatibility
+    # Support legacy flattened string HMAC for backward compatibility
     legacy_str = f"{req_dict.get('command')} {' '.join(req_dict.get('args', []))}".strip()
-    expected_legacy = hmac.new(secret.encode("utf-8"), legacy_str.encode("utf-8"), hashlib.sha256).hexdigest()
+    expected_legacy = hmac.new(
+        secret.encode("utf-8"), legacy_str.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
     return hmac.compare_digest(expected_legacy, token)
 
-def prompt_user_approval(command_name, args):
+
+def prompt_user_approval(command_name: str, args: List[str]) -> bool:
+    """Prompt user for confirmation via native macOS AppleScript dialog."""
     try:
-        if isinstance(args, list):
-            cmd_display = shlex.join([command_name] + args)
-        else:
-            cmd_display = f"{command_name} {args}"
-        # Escape backslashes first, then double quotes to prevent AppleScript syntax malformation
-        escaped_cmd = cmd_display.replace('\\', '\\\\').replace('"', '\\"')
+        cmd_display = shlex.join([command_name] + args) if isinstance(args, list) else f"{command_name} {args}"
+        escaped_cmd = cmd_display.replace("\\", "\\\\").replace('"', '\\"')
         applescript = (
             f'display dialog "Antigravity Container is requesting to execute the following command on your macOS host:\n\n'
             f'{escaped_cmd}\n\nDo you authorize this execution?" '
@@ -165,19 +218,17 @@ def prompt_user_approval(command_name, args):
             f'buttons {{"Deny", "Approve"}} default button "Deny" with icon caution'
         )
         res = subprocess.run(["osascript", "-e", applescript], capture_output=True, text=True)
-        if res.returncode == 0 and "Approve" in res.stdout:
-            return True
-        return False
+        return res.returncode == 0 and "Approve" in res.stdout
     except Exception as e:
-        logging.error(f"Failed to prompt user via osascript: {e}")
+        logging.error("Failed to prompt user via osascript: %s", e)
         return False
 
-def translate_cwd(container_cwd, whitelist=None):
-    # 1. Direct host path match (Host-Path Mirroring)
+
+def translate_cwd(container_cwd: str, whitelist: Optional[Dict[str, Any]] = None) -> str:
+    """Translate container directory path to corresponding macOS host path."""
     if os.path.isdir(container_cwd):
         return container_cwd
 
-    # 2. Check whitelisted workspaces if path begins with legacy /workspace
     repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if whitelist and whitelist.get("allowed_workspaces"):
         allowed = whitelist["allowed_workspaces"]
@@ -193,7 +244,9 @@ def translate_cwd(container_cwd, whitelist=None):
 
     return repo_dir if os.path.isdir(repo_dir) else os.path.expanduser("~")
 
-def handle_client(conn, secret, whitelist):
+
+def handle_client(conn: socket.socket, secret: str):
+    """Process an individual client request."""
     try:
         chunks = []
         while True:
@@ -213,18 +266,48 @@ def handle_client(conn, secret, whitelist):
         token = req.get("token", "")
         raw_cwd = req.get("cwd", "/workspace")
 
-        full_cmd_str = f"{command_name} {shlex.join(args)}".strip()
-        logging.info(f"Received host execution request: {full_cmd_str}")
+        whitelist = load_whitelist()
 
         if not verify_token(req, token, secret):
             logging.warning("HMAC Token verification failed!")
-            conn.sendall((json.dumps({"status": "error", "message": "Authentication failed: invalid HMAC token"}) + "\n").encode("utf-8"))
+            conn.sendall(
+                (json.dumps({"status": "error", "message": "Authentication failed: invalid HMAC token"}) + "\n").encode("utf-8")
+            )
             return
+
+        # Handle introspection capability request (__list__)
+        if command_name in ["__list__", "__capabilities__"]:
+            logging.info("Handled introspection capabilities request (__list__)")
+            commands_summary = {}
+            for c_name, policy in whitelist.get("allowed_commands", {}).items():
+                commands_summary[c_name] = {
+                    "binary_path": policy.get("binary_path", ""),
+                    "allowed_args_regex": policy.get("allowed_args_regex", ".*"),
+                    "require_interactive_approval": policy.get("require_interactive_approval", False),
+                    "description": get_command_description(c_name, policy),
+                }
+            resp = {
+                "status": "success",
+                "type": "capabilities",
+                "allowed_workspaces": whitelist.get("allowed_workspaces", []),
+                "allowed_commands": commands_summary,
+            }
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+            return
+
+        full_cmd_str = f"{command_name} {shlex.join(args)}".strip()
+        logging.info("Received host execution request: %s", full_cmd_str)
 
         policies = whitelist.get("allowed_commands", {})
         if command_name not in policies:
-            logging.warning(f"Command '{command_name}' is not in host whitelist!")
-            conn.sendall((json.dumps({"status": "error", "message": f"Command '{command_name}' is not whitelisted on host (~/.antigravity-sandbox/whitelist.yaml)"}) + "\n").encode("utf-8"))
+            logging.warning("Command '%s' is not in host whitelist!", command_name)
+            conn.sendall(
+                (json.dumps({
+                    "status": "error",
+                    "error_type": "not_whitelisted",
+                    "message": f"Command '{command_name}' is not whitelisted on host (~/.antigravity-sandbox/whitelist.yaml)",
+                }) + "\n").encode("utf-8")
+            )
             return
 
         policy = policies[command_name]
@@ -234,61 +317,69 @@ def handle_client(conn, secret, whitelist):
         flat_args_str = " ".join(args)
 
         if not (re.fullmatch(args_regex, args_str) or re.fullmatch(args_regex, flat_args_str)):
-            logging.warning(f"Arguments '{args_str}' violated policy regex: {args_regex}")
-            conn.sendall((json.dumps({"status": "error", "message": f"Command arguments '{args_str}' violated whitelist pattern ({args_regex}) in ~/.antigravity-sandbox/whitelist.yaml"}) + "\n").encode("utf-8"))
+            logging.warning("Arguments '%s' violated policy regex: %s", args_str, args_regex)
+            conn.sendall(
+                (json.dumps({
+                    "status": "error",
+                    "error_type": "args_violation",
+                    "message": f"Command arguments '{args_str}' violated whitelist pattern ({args_regex}) in ~/.antigravity-sandbox/whitelist.yaml",
+                }) + "\n").encode("utf-8")
+            )
             return
 
         # Check if interactive approval is required
         if policy.get("require_interactive_approval", False):
-            logging.info(f"Command '{command_name}' requires interactive approval. Prompting user...")
+            logging.info("Command '%s' requires interactive approval. Prompting user...", command_name)
             approved = prompt_user_approval(command_name, args)
             if not approved:
-                logging.warning(f"Execution of '{full_cmd_str}' was denied by user.")
-                conn.sendall((json.dumps({"status": "error", "message": "Execution denied by user via macOS approval dialog"}) + "\n").encode("utf-8"))
+                logging.warning("Execution of '%s' was denied by user.", full_cmd_str)
+                conn.sendall(
+                    (json.dumps({
+                        "status": "error",
+                        "error_type": "denied_by_user",
+                        "message": "Execution denied by user via macOS approval dialog",
+                    }) + "\n").encode("utf-8")
+                )
                 return
             logging.info("Execution approved by user.")
 
-        # Translate cwd from container path to host path safely
         effective_cwd = translate_cwd(raw_cwd, whitelist)
-        logging.info(f"Executing '{bin_path}' with cwd='{effective_cwd}'")
+        logging.info("Executing '%s' with cwd='%s'", bin_path, effective_cwd)
 
-        # Execute safe command on host
         cmd = [bin_path] + args
         proc = subprocess.run(cmd, cwd=effective_cwd, capture_output=True, text=True)
         response = {
             "status": "success",
             "returncode": proc.returncode,
             "stdout": proc.stdout,
-            "stderr": proc.stderr
+            "stderr": proc.stderr,
         }
         conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
     except Exception as e:
-        logging.error(f"Error handling request: {e}")
+        logging.error("Error handling request: %s", e)
         conn.sendall((json.dumps({"status": "error", "message": str(e)}) + "\n").encode("utf-8"))
     finally:
         conn.close()
 
-HOST_EXEC_BIND = os.environ.get("HOST_EXEC_BIND", "0.0.0.0")
-HOST_EXEC_PORT = int(os.environ.get("HOST_EXEC_PORT", "58433"))
 
 def main():
     secret = get_or_create_secret()
-    whitelist = load_whitelist()
+    initial_whitelist = load_whitelist()
 
-    sockets_to_watch = []
+    sockets_to_watch: List[socket.socket] = []
 
-    # 1. Setup TCP Socket (For Container Guest over host.docker.internal)
+    # 1. TCP Socket (For Container Guest over host.docker.internal)
     tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         tcp_sock.bind((HOST_EXEC_BIND, HOST_EXEC_PORT))
         tcp_sock.listen(10)
         sockets_to_watch.append(tcp_sock)
-        logging.info(f"Host-Exec Daemon listening on TCP {HOST_EXEC_BIND}:{HOST_EXEC_PORT}")
+        logging.info("Host-Exec Daemon listening on TCP %s:%s", HOST_EXEC_BIND, HOST_EXEC_PORT)
     except Exception as e:
-        logging.error(f"Failed to bind TCP socket on {HOST_EXEC_BIND}:{HOST_EXEC_PORT}: {e}")
+        logging.error("Failed to bind TCP socket on %s:%s: %s", HOST_EXEC_BIND, HOST_EXEC_PORT, e)
 
-    # 2. Setup Unix Domain Socket (For local macOS host IPC)
+    # 2. Unix Domain Socket (For local macOS host IPC)
     os.makedirs(IPC_DIR, exist_ok=True)
     if os.path.exists(SOCKET_PATH):
         try:
@@ -296,28 +387,31 @@ def main():
         except Exception:
             pass
 
-    unix_sock = None
     try:
         unix_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         unix_sock.bind(SOCKET_PATH)
         os.chmod(SOCKET_PATH, 0o666)
         unix_sock.listen(10)
         sockets_to_watch.append(unix_sock)
-        logging.info(f"Host-Exec Daemon listening on Unix socket {SOCKET_PATH}")
+        logging.info("Host-Exec Daemon listening on Unix socket %s", SOCKET_PATH)
     except Exception as e:
-        logging.warning(f"Failed to bind Unix domain socket on {SOCKET_PATH}: {e}")
+        logging.warning("Failed to bind Unix domain socket on %s: %s", SOCKET_PATH, e)
 
     if not sockets_to_watch:
         logging.critical("No sockets available to listen on. Exiting.")
         sys.exit(1)
 
-    logging.info(f"Host-Exec Daemon is active. Whitelist loaded from {WHITELIST_PATH}")
+    num_cmds = len(initial_whitelist.get("allowed_commands", {}))
+    logging.info(
+        "Host-Exec Daemon is active with %d whitelisted commands. Whitelist will hot-reload on change.", num_cmds
+    )
+
     try:
         while True:
             readable, _, _ = select.select(sockets_to_watch, [], [])
             for s in readable:
                 conn, _ = s.accept()
-                handle_client(conn, secret, whitelist)
+                handle_client(conn, secret)
     except KeyboardInterrupt:
         logging.info("Shutting down daemon...")
     finally:
@@ -331,6 +425,7 @@ def main():
                 os.remove(SOCKET_PATH)
             except Exception:
                 pass
+
 
 if __name__ == "__main__":
     main()
