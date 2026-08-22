@@ -203,6 +203,60 @@ except Exception as e:
 "
 }
 
+function validate_rule_collisions() {
+  ensure_sandbox_venv
+  local gemini_host_dir="${HOST_GEMINI_DIR:-$HOME/.gemini}"
+  local host_rules_dir="$gemini_host_dir/config/rules"
+  local builtin_rules_dir="$DIR/customizations/rules"
+
+  "$PYTHON_BIN" -c "
+import os, sys
+
+sources = [
+    ('Host Rules (~/.gemini/config/rules)', '$host_rules_dir'),
+    ('Built-in Rules (customizations/rules)', '$builtin_rules_dir'),
+]
+
+seen = {}
+collisions = {}
+
+for label, sdir in sources:
+    if not os.path.isdir(sdir):
+        continue
+    try:
+        entries = sorted(os.listdir(sdir))
+    except Exception:
+        continue
+    for entry in entries:
+        if entry.startswith('.') or not entry.lower().endswith('.md'):
+            continue
+        full_path = os.path.join(sdir, entry)
+        if not os.path.isfile(full_path):
+            continue
+        key = entry
+        if key in seen:
+            if key not in collisions:
+                collisions[key] = [seen[key]]
+            collisions[key].append((label, full_path))
+        else:
+            seen[key] = (label, full_path)
+
+if collisions:
+    print('==========================================================', file=sys.stderr)
+    print('  [Sandbox Error] Rule Filename Collision Detected!', file=sys.stderr)
+    print('==========================================================', file=sys.stderr)
+    print('Conflicting rule files found across configuration sources:', file=sys.stderr)
+    for fname, src_list in collisions.items():
+        print(f'  - \"{fname}\":', file=sys.stderr)
+        for lbl, pth in src_list:
+            print(f'      * {lbl}: {pth}', file=sys.stderr)
+    print('', file=sys.stderr)
+    print('[Sandbox Error] Startup aborted. Please ensure all rule filenames are distinct.', file=sys.stderr)
+    print('==========================================================', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
 function is_container_running() {
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^antigravity-sandbox$"; then
     return 0
@@ -470,6 +524,7 @@ case "$COMMAND" in
 
     ensure_sandbox_venv
     ensure_whitelist_config
+    validate_rule_collisions
     generate_compose_override
 
     if is_container_running; then
@@ -514,6 +569,7 @@ except Exception:
 
   restart)
     echo "[Sandbox] Restarting Sandbox..."
+    validate_rule_collisions
     generate_compose_override
     run_compose restart
     echo "[Sandbox] Sandbox is running with Language Server daemon."
