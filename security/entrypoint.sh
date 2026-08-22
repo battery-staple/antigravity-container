@@ -13,7 +13,7 @@ export TMPDIR="${TMPDIR:-/home/developer/.gemini/sandbox-tmp}"
 mkdir -p /home/developer/.gemini/antigravity "$TMPDIR" /home/developer/.gemini/config /home/developer/.npm-global /home/developer/.gradle /workspace 2>/dev/null || true
 
 # Auto-seed agent customizations (container awareness rule and host-exec skill)
-if [ -d "/etc/antigravity/customizations" ] || [ -d "/etc/antigravity/host-rules" ]; then
+if [ -d "/etc/antigravity/customizations" ] || [ -d "/etc/antigravity/host-rules" ] || [ -d "/etc/antigravity/user-sandbox-rules" ]; then
     # Prepare container rules directory in tmpfs (isolated in RAM, never writes back to host)
     mkdir -p /home/developer/.gemini/config/rules 2>/dev/null || true
 
@@ -24,6 +24,7 @@ import os, sys, shutil
 rule_sources = [
     ('Host Rules (/etc/antigravity/host-rules)', '/etc/antigravity/host-rules'),
     ('Built-in Rules (/etc/antigravity/customizations/rules)', '/etc/antigravity/customizations/rules'),
+    ('User Sandbox Rules (/etc/antigravity/user-sandbox-rules)', '/etc/antigravity/user-sandbox-rules'),
 ]
 
 rules_dest = '/home/developer/.gemini/config/rules'

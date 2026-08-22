@@ -95,7 +95,8 @@ function show_help() {
 function ensure_whitelist_config() {
   ensure_sandbox_venv
   local gemini_host_dir="${HOST_GEMINI_DIR:-$HOME/.gemini}"
-  mkdir -p "$SANDBOX_DIR" "$IPC_DIR" "$LOGS_DIR" "$gemini_host_dir/antigravity/brain" "$gemini_host_dir/sandbox-tmp" "$gemini_host_dir/config/rules" 2>/dev/null || true
+  local user_rules_dir="${HOST_SANDBOX_RULES_DIR:-$SANDBOX_DIR/rules}"
+  mkdir -p "$SANDBOX_DIR" "$user_rules_dir" "$IPC_DIR" "$LOGS_DIR" "$gemini_host_dir/antigravity/brain" "$gemini_host_dir/sandbox-tmp" "$gemini_host_dir/config/rules" 2>/dev/null || true
   chmod 0700 "$IPC_DIR" 2>/dev/null || true
 
   "$PYTHON_BIN" -c "
@@ -208,6 +209,7 @@ function validate_rule_collisions() {
   local gemini_host_dir="${HOST_GEMINI_DIR:-$HOME/.gemini}"
   local host_rules_dir="$gemini_host_dir/config/rules"
   local builtin_rules_dir="$DIR/customizations/rules"
+  local user_rules_dir="${HOST_SANDBOX_RULES_DIR:-$SANDBOX_DIR/rules}"
 
   "$PYTHON_BIN" -c "
 import os, sys
@@ -215,6 +217,7 @@ import os, sys
 sources = [
     ('Host Rules (~/.gemini/config/rules)', '$host_rules_dir'),
     ('Built-in Rules (customizations/rules)', '$builtin_rules_dir'),
+    ('User Sandbox Rules (~/.antigravity-sandbox/rules)', '$user_rules_dir'),
 ]
 
 seen = {}
@@ -493,6 +496,30 @@ except Exception as e:
 "
 }
 
+function cmd_rules_list() {
+  ensure_sandbox_venv
+  ensure_whitelist_config
+  local user_rules_dir="${HOST_SANDBOX_RULES_DIR:-$SANDBOX_DIR/rules}"
+  "$PYTHON_BIN" -c "
+import os
+rdir = '$user_rules_dir'
+print('==========================================================')
+print('  Sandbox-Specific Global Rules (~/.antigravity-sandbox/rules)')
+print('==========================================================')
+rules = []
+if os.path.isdir(rdir):
+    for f in sorted(os.listdir(rdir)):
+        if not f.startswith('.') and f.lower().endswith('.md') and os.path.isfile(os.path.join(rdir, f)):
+            rules.append(f)
+if not rules:
+    print('  (No custom sandbox rules configured)')
+else:
+    for idx, r in enumerate(rules, 1):
+        print(f'  {idx}. {r}')
+print('==========================================================')
+"
+}
+
 case "$COMMAND" in
   workspace|ws)
     SUB_CMD="$1"
@@ -530,6 +557,8 @@ case "$COMMAND" in
     if is_container_running; then
       echo "[Sandbox] Antigravity Sandbox is already running."
       echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
+      cmd_rules_list
+      echo ""
       cmd_workspace_list
       exit 0
     fi
@@ -554,6 +583,8 @@ except Exception:
       echo "[Sandbox] You can add workspaces anytime using: antigravity-sandbox workspace add <path>"
     else
       echo "[Sandbox] Starting Antigravity Sandbox with VirtioFS..."
+      cmd_rules_list
+      echo ""
       cmd_workspace_list
     fi
 
@@ -582,11 +613,13 @@ except Exception:
     ;;
 
   status)
-    run_compose ps
+    run_compose ps 2>/dev/null || true
     if is_container_running; then
       echo "[Status] Language Server daemon: Active (Listening on https://127.0.0.1:58432)"
     fi
     docker stats --no-stream antigravity-sandbox 2>/dev/null || true
+    echo ""
+    cmd_rules_list
     echo ""
     cmd_workspace_list
     ;;
