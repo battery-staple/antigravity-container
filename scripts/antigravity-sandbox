@@ -91,6 +91,7 @@ function show_help() {
   echo "  build                               Rebuild the sandbox container image (after Dockerfile edits)"
   echo "  status                              Display current sandbox status and resource usage"
   echo "  app                                 Launch Antigravity Desktop App connected to Sandbox"
+  echo "  open [subpath]                      Open ~/.antigravity-sandbox directory (or subpath) in file manager"
   echo "  host-bridge                         Start the host binary execution bridge daemon"
   echo "  help                                Show this help message"
   echo "=========================================================="
@@ -574,6 +575,30 @@ print('==========================================================')
 "
 }
 
+function cmd_open() {
+  ensure_whitelist_config
+  local target="$SANDBOX_DIR"
+  if [ -n "$1" ]; then
+    if [ -e "$SANDBOX_DIR/$1" ]; then
+      target="$SANDBOX_DIR/$1"
+    elif [ -e "$1" ]; then
+      target="$1"
+    else
+      echo "[Sandbox Warning] '$1' not found inside $SANDBOX_DIR, opening $SANDBOX_DIR" >&2
+    fi
+  fi
+
+  echo "[Sandbox] Opening: $target"
+  if command -v open >/dev/null 2>&1; then
+    open "$target"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$target" >/dev/null 2>&1 || true
+  else
+    echo "[Sandbox] File manager opener (open/xdg-open) not available."
+    echo "[Sandbox] Target path: $target"
+  fi
+}
+
 case "$COMMAND" in
   workspace|ws)
     SUB_CMD="$1"
@@ -709,6 +734,10 @@ except Exception:
     else
       DEV_URL="https://127.0.0.1:58432" open -a "/Applications/Antigravity.app"
     fi
+    ;;
+
+  open|reveal|dir)
+    cmd_open "$@"
     ;;
 
   host-bridge)

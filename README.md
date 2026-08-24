@@ -122,6 +122,21 @@ antigravity-sandbox rules
 
 ---
 
+## Sandbox Directory & Quick Open (`~/.antigravity-sandbox`)
+
+Quickly open the sandbox directory in Finder (macOS) or system file manager to edit rules, inspect `whitelist.yaml`, or check logs:
+
+```bash
+# Open ~/.antigravity-sandbox in Finder / file manager
+antigravity-sandbox open
+
+# Open a specific subdirectory or file
+antigravity-sandbox open rules
+antigravity-sandbox open whitelist.yaml
+```
+
+---
+
 ## Host-Exec Bridge (macOS Host Tools)
 
 Because the container runs Linux, macOS-only tools (e.g., Xcode / `xcodebuild`, iOS Simulator, macOS Keychain) cannot execute directly in the sandbox. The optional Host-Exec bridge allows the agent to invoke specific macOS binaries on the host system under strict security guardrails.
