@@ -46,16 +46,10 @@ services:
       - type: bind
         source: ${HOST_GEMINI_DIR:-${HOME}/.gemini}
         target: /home/developer/.gemini
-      # Mount host rules read-only for staging (allows merging host rules into container without polluting host)
+      # Mount compiled sandbox GEMINI.md over ~/.gemini/GEMINI.md (isolates container rules from host)
       - type: bind
-        source: ${HOST_GEMINI_DIR:-${HOME}/.gemini}/config/rules
-        target: /etc/antigravity/host-rules
-        read_only: true
-      # Mount user sandbox-specific rules read-only for staging
-      - type: bind
-        source: ${HOST_SANDBOX_RULES_DIR:-${HOME}/.antigravity-sandbox/rules}
-        target: /etc/antigravity/user-sandbox-rules
-        read_only: true
+        source: ${HOST_SANDBOX_GEMINI:-${HOST_SANDBOX_DIR:-${HOME}/.antigravity-sandbox}/GEMINI.md}
+        target: /home/developer/.gemini/GEMINI.md
       # Persistent user data, dotfiles, tool caches, and agent state
       - antigravity_home_persist:/home/developer
       # Host-Exec shared socket directory
@@ -63,9 +57,6 @@ services:
         source: ${HOST_IPC_PATH:-${HOME}/.antigravity-sandbox/ipc}
         target: /var/run/host-exec
         read_only: true
-    tmpfs:
-      # Isolate container's ~/.gemini/config/rules in RAM so container-only rules do not write back to host
-      - /home/developer/.gemini/config/rules:rw,noexec,nosuid,size=10m,mode=1777
 
 volumes:
   antigravity_home_persist:

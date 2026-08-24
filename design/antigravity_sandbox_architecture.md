@@ -290,56 +290,55 @@ To ensure the AI agent operates with complete clarity about its execution enviro
 ```mermaid
 flowchart TB
     subgraph Host_Mac ["Host macOS Environment"]
-        HR["Host Global Rules (~/.gemini/config/rules/*.md)"]
+        HG["Host Global Rules (~/.gemini/GEMINI.md)"]
         SR["User Sandbox Rules (~/.antigravity-sandbox/rules/*.md)"]
+        BUILTIN["Built-in Container Rules (customizations/rules/*.md)"]
+        COMP["CLI Rule Compiler (antigravity-sandbox)"]
+        SG["Compiled Sandbox Rules (~/.antigravity-sandbox/GEMINI.md)"]
         HB["Host Conversation Brain (~/.gemini/antigravity/brain)"]
     end
 
     subgraph Container_NS ["Docker Sandbox Container"]
-        STAGE_H["Host Rules Staging (/etc/antigravity/host-rules, Read-Only)"]
-        STAGE_S["User Sandbox Rules Staging (/etc/antigravity/user-sandbox-rules, Read-Only)"]
-        BUILTIN_R["Built-in Container Rules (/etc/antigravity/customizations/rules/*.md)"]
-        VAL{"Collision Detector<br/>(Fail-Fast on Duplicates)"}
-        TMP["In-Memory tmpfs Overlay (/home/developer/.gemini/config/rules/*.md)"]
+        CG["Container Global Rules (/home/developer/.gemini/GEMINI.md)"]
         BUILTIN_SKILLS["Built-in Skills Directory (/home/developer/.gemini/antigravity/builtin/skills/host-exec)"]
         LS["Antigravity Language Server Daemon"]
 
-        STAGE_H --> VAL
-        STAGE_S --> VAL
-        BUILTIN_R --> VAL
-        VAL -->|"Zero Collisions: Merge *.md"| TMP
-        VAL -->|"Collision: Abort Startup"| ERR["Startup Error & Exit 1"]
-        TMP -->|"Discovered Global Rules"| LS
+        CG -->|"Discovered Global Rules (user_global)"| LS
         BUILTIN_SKILLS -->|"Discovered Builtin Skill"| LS
     end
 
-    HR -->|"Read-Only Bind Mount"| STAGE_H
-    SR -->|"Read-Only Bind Mount"| STAGE_S
-    TMP -.->|"Blocked: In-Memory Only (Zero Host Pollution)"| HR
+    HG --> COMP
+    SR --> COMP
+    BUILTIN --> COMP
+    COMP -->|"Compiles Unified Rules"| SG
+    SG -->|"Single-File Bind Mount (Shadows ~/.gemini/GEMINI.md)"| CG
+    CG -.->|"Host Isolation Guaranteed (Never Writes to Host ~/.gemini/GEMINI.md)"| HG
 ```
 
 ### 9.1 Container Environment Rule (`customizations/rules/container-environment.md`)
-- **Type**: Built-in Always-On Rule (seeded into `/home/developer/.gemini/config/rules/`).
+- **Type**: Built-in Always-On Rule (compiled into `/home/developer/.gemini/GEMINI.md`).
 - **Function**:
   - Informs the agent that it runs inside an isolated Ubuntu 24.04 Linux container.
   - Confirms it has full impunity to run terminal commands, compile code, create temporary files, and install packages.
   - Informs the agent that macOS-specific tools cannot be run directly via shell, but must be executed using the `host-exec` tool via the `host-exec` skill.
   - **Evergreen Design**: Does not hardcode specific tool names, eliminating any need to edit rules when whitelist policies change.
 
-### 9.2 Sandbox-Specific Global Rules & `tmpfs` Shadow-Merge Pattern
+### 9.2 Sandbox-Specific Global Rules & `GEMINI.md` Shadow-Mount Pattern
 To allow the container agent to inherit global user rules from macOS and load custom sandbox rules while preventing container-specific rules from leaking to the host:
-1. **The Leak Risk**: The host `~/.gemini` directory is bind-mounted at `/home/developer/.gemini` for OAuth tokens and shared state. If the container wrote container-specific rules directly into `/home/developer/.gemini/config/rules/`, it would write to the host's `~/.gemini/config/rules/`, causing host agents on macOS to mistakenly believe they are running inside Ubuntu 24.04.
-2. **Read-Only Staging**:
-   - `docker-compose.yml` mounts host `~/.gemini/config/rules` as read-only to `/etc/antigravity/host-rules`.
-   - `docker-compose.yml` mounts user sandbox rules `~/.antigravity-sandbox/rules` as read-only to `/etc/antigravity/user-sandbox-rules`.
-3. **In-Memory `tmpfs` Overlay**: A `tmpfs` mount is attached to `/home/developer/.gemini/config/rules`. It shadows the bind mount with an isolated, in-memory RAM filesystem.
-4. **Collision Detection & Fail-Fast Validation**:
-   - Both pre-flight CLI checks and container entrypoint scan all `.md` files across `/etc/antigravity/host-rules`, `/etc/antigravity/customizations/rules`, and `/etc/antigravity/user-sandbox-rules`.
-   - If any filename collision exists across sources, startup immediately halts with a descriptive error (`exit 1`) to prevent ambiguous rule behavior.
-5. **Startup Merge**: When collision-free, `security/entrypoint.sh` copies all discovered `.md` files into the `tmpfs` at `/home/developer/.gemini/config/rules/`.
-6. **Outcome**:
+1. **The Leak Risk**: The host `~/.gemini` directory is bind-mounted at `/home/developer/.gemini` for OAuth tokens and shared state. If the container wrote container-specific rules directly into `/home/developer/.gemini/GEMINI.md`, it would write to the host's `~/.gemini/GEMINI.md`, causing host agents on macOS to mistakenly believe they are running inside Ubuntu 24.04.
+2. **Host-Side Pre-Compilation**:
+   - `scripts/antigravity-sandbox` aggregates:
+     - Built-in container rules (`customizations/rules/*.md`)
+     - User sandbox rules (`~/.antigravity-sandbox/rules/*.md`)
+     - Host global rules (`~/.gemini/GEMINI.md`, if present on macOS)
+   - The CLI compiles these into a single unified Markdown file at `~/.antigravity-sandbox/GEMINI.md`.
+3. **Single-File Shadow Mount**:
+   - `docker-compose.yml` mounts `~/.antigravity-sandbox/GEMINI.md` directly over `/home/developer/.gemini/GEMINI.md`.
+   - This cleanly shadows the file within the container so the Language Server discovers it as `user_global` memory (`globalScope: {}`).
+4. **Outcome**:
    - The in-container Language Server discovers and loads all host rules **plus** built-in container rules **plus** user sandbox rules.
-   - The host's `~/.gemini/config/rules/` directory remains completely clean and untouched.
+   - The host's `~/.gemini/GEMINI.md` file remains completely clean and untouched.
+   - No `tmpfs` mounts, no `sudo chown` startup hacks, and no artificial filename collision aborts are required.
 
 ### 9.3 Host-Exec Runbook Skill (`customizations/skills/host-exec/SKILL.md`)
 - **Type**: On-Demand Progressive Disclosure Skill (seeded into `/home/developer/.gemini/antigravity/builtin/skills/host-exec/`).
@@ -358,11 +357,12 @@ The table below details all files implementing this architecture:
 | File Path | Description |
 | :--- | :--- |
 | [`Dockerfile.sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/Dockerfile.sandbox) | Hardened Ubuntu 24.04 image with Node.js 22, Go 1.23, Python 3, built-in Antigravity language_server, customizations, and user setup. |
-| [`docker-compose.yml`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/docker-compose.yml) | Service definition, VirtioFS bind mounts, `tmpfs` rules overlay, host-rules staging, user-sandbox-rules staging, shared brain volume, dev ports (3000-3005, 5173, 8080, 8081), and shm_size (2gb). |
-| [`scripts/antigravity-sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/antigravity-sandbox) | Unified CLI tool (`start`, `stop`, `restart`, `build`, `app`, `host-bridge`, `status`, `workspace`, sandbox rules inspection). |
-| [`security/entrypoint.sh`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/security/entrypoint.sh) | Container entrypoint auto-seeding customizations, performing fail-fast collision validation and tmpfs shadow-merge for rules, and launching language server. |
+| [`docker-compose.yml`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/docker-compose.yml) | Service definition, VirtioFS bind mounts, `GEMINI.md` shadow mount, shared brain volume, dev ports (3000-3005, 5173, 8080, 8081), and shm_size (2gb). |
+| [`scripts/antigravity-sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/antigravity-sandbox) | Unified CLI tool (`start`, `stop`, `restart`, `build`, `app`, `host-bridge`, `status`, `workspace`, `rules`). |
+| [`security/entrypoint.sh`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/security/entrypoint.sh) | Container entrypoint auto-seeding skills and launching language server. |
 | [`customizations/rules/container-environment.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/customizations/rules/container-environment.md) | Built-in agent rule explaining container environment and impunity. |
 | `~/.antigravity-sandbox/rules/*.md` | User-defined global rules that only apply when executing inside the sandbox container. |
+| `~/.antigravity-sandbox/GEMINI.md` | Compiled sandbox rules document shadowed into the container. |
 | [`customizations/skills/host-exec/SKILL.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/customizations/skills/host-exec/SKILL.md) | Agent skill runbook for invoking whitelisted host binaries via `host-exec`. |
 | [`bridge/host_exec_daemon.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/bridge/host_exec_daemon.py) | Host daemon listening on port 58433, enforcing whitelist policies with AppleScript dialogs. |
 | [`bin/host-exec`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/bin/host-exec) | Guest client generating canonical HMAC-SHA256 signatures for host binary execution. |

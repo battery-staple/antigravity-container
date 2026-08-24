@@ -80,6 +80,10 @@ function show_help() {
   echo "  workspace list                      List all currently whitelisted workspaces"
   echo "  (Aliases: ws add, ws rm, ws ls)"
   echo ""
+  echo "Rules Commands:"
+  echo "  rules                               Display active rules and compiled GEMINI.md status"
+  echo "  (Alias: rules list)"
+  echo ""
   echo "Core Commands:"
   echo "  start                               Start the sandbox container with whitelisted workspaces"
   echo "  stop                                Stop the running sandbox container"
@@ -96,7 +100,24 @@ function ensure_whitelist_config() {
   ensure_sandbox_venv
   local gemini_host_dir="${HOST_GEMINI_DIR:-$HOME/.gemini}"
   local user_rules_dir="${HOST_SANDBOX_RULES_DIR:-$SANDBOX_DIR/rules}"
-  mkdir -p "$SANDBOX_DIR" "$user_rules_dir" "$IPC_DIR" "$LOGS_DIR" "$gemini_host_dir/antigravity/brain" "$gemini_host_dir/sandbox-tmp" "$gemini_host_dir/config/rules" 2>/dev/null || true
+  local sandbox_gemini="${HOST_SANDBOX_GEMINI:-$SANDBOX_DIR/GEMINI.md}"
+  local host_gemini="$gemini_host_dir/GEMINI.md"
+  mkdir -p "$SANDBOX_DIR" "$user_rules_dir" "$IPC_DIR" "$LOGS_DIR" "$gemini_host_dir/antigravity/brain" "$gemini_host_dir/sandbox-tmp" 2>/dev/null || true
+  if [ -d "$host_gemini" ]; then
+    if ! rmdir "$host_gemini" 2>/dev/null; then
+      echo "[Sandbox Error] '$host_gemini' is a non-empty directory." >&2
+      echo "[Sandbox Error] Expected a file for GEMINI.md, but found a directory containing files. Please remove or move this directory before starting the sandbox." >&2
+      exit 1
+    fi
+  fi
+  if [ -d "$sandbox_gemini" ]; then
+    if ! rmdir "$sandbox_gemini" 2>/dev/null; then
+      echo "[Sandbox Error] '$sandbox_gemini' is a non-empty directory." >&2
+      echo "[Sandbox Error] Expected a file for GEMINI.md, but found a directory containing files. Please remove or move this directory before starting the sandbox." >&2
+      exit 1
+    fi
+  fi
+  touch "$sandbox_gemini" "$host_gemini" 2>/dev/null || true
   chmod 0700 "$IPC_DIR" 2>/dev/null || true
 
   "$PYTHON_BIN" -c "
@@ -204,58 +225,70 @@ except Exception as e:
 "
 }
 
-function validate_rule_collisions() {
+function compile_sandbox_rules() {
   ensure_sandbox_venv
+  ensure_whitelist_config
   local gemini_host_dir="${HOST_GEMINI_DIR:-$HOME/.gemini}"
-  local host_rules_dir="$gemini_host_dir/config/rules"
   local builtin_rules_dir="$DIR/customizations/rules"
   local user_rules_dir="${HOST_SANDBOX_RULES_DIR:-$SANDBOX_DIR/rules}"
+  local sandbox_gemini="${HOST_SANDBOX_GEMINI:-$SANDBOX_DIR/GEMINI.md}"
+  local host_gemini="$gemini_host_dir/GEMINI.md"
 
   "$PYTHON_BIN" -c "
 import os, sys
 
-sources = [
-    ('Host Rules (~/.gemini/config/rules)', '$host_rules_dir'),
-    ('Built-in Rules (customizations/rules)', '$builtin_rules_dir'),
-    ('User Sandbox Rules (~/.antigravity-sandbox/rules)', '$user_rules_dir'),
-]
+builtin_dir = '$builtin_rules_dir'
+user_dir = '$user_rules_dir'
+host_gemini_file = '$host_gemini'
+target_gemini_file = '$sandbox_gemini'
 
-seen = {}
-collisions = {}
+sections = []
 
-for label, sdir in sources:
-    if not os.path.isdir(sdir):
-        continue
+# 1. Built-in Container Rules (e.g. container-environment.md)
+if os.path.isdir(builtin_dir):
+    for f in sorted(os.listdir(builtin_dir)):
+        if not f.startswith('.') and f.lower().endswith('.md'):
+            p = os.path.join(builtin_dir, f)
+            if os.path.isfile(p):
+                try:
+                    with open(p, 'r', encoding='utf-8') as rf:
+                        content = rf.read().strip()
+                    if content:
+                        sections.append(f'<!-- BUILT-IN CONTAINER RULE: {f} -->\n{content}')
+                except Exception as e:
+                    print(f'[Sandbox Warning] Failed to read built-in rule {p}: {e}', file=sys.stderr)
+
+# 2. User Sandbox-Specific Rules (~/.antigravity-sandbox/rules/*.md)
+if os.path.isdir(user_dir):
+    for f in sorted(os.listdir(user_dir)):
+        if not f.startswith('.') and f.lower().endswith('.md'):
+            p = os.path.join(user_dir, f)
+            if os.path.isfile(p):
+                try:
+                    with open(p, 'r', encoding='utf-8') as rf:
+                        content = rf.read().strip()
+                    if content:
+                        sections.append(f'<!-- USER SANDBOX RULE: {f} -->\n{content}')
+                except Exception as e:
+                    print(f'[Sandbox Warning] Failed to read user sandbox rule {p}: {e}', file=sys.stderr)
+
+# 3. Host Global Rules (~/.gemini/GEMINI.md, if present on macOS)
+if os.path.isfile(host_gemini_file):
     try:
-        entries = sorted(os.listdir(sdir))
-    except Exception:
-        continue
-    for entry in entries:
-        if entry.startswith('.') or not entry.lower().endswith('.md'):
-            continue
-        full_path = os.path.join(sdir, entry)
-        if not os.path.isfile(full_path):
-            continue
-        key = entry
-        if key in seen:
-            if key not in collisions:
-                collisions[key] = [seen[key]]
-            collisions[key].append((label, full_path))
-        else:
-            seen[key] = (label, full_path)
+        with open(host_gemini_file, 'r', encoding='utf-8') as rf:
+            content = rf.read().strip()
+        if content:
+            sections.append(f'<!-- HOST GLOBAL RULES (macOS ~/.gemini/GEMINI.md) -->\n{content}')
+    except Exception as e:
+        print(f'[Sandbox Warning] Failed to read host GEMINI.md: {e}', file=sys.stderr)
 
-if collisions:
-    print('==========================================================', file=sys.stderr)
-    print('  [Sandbox Error] Rule Filename Collision Detected!', file=sys.stderr)
-    print('==========================================================', file=sys.stderr)
-    print('Conflicting rule files found across configuration sources:', file=sys.stderr)
-    for fname, src_list in collisions.items():
-        print(f'  - \"{fname}\":', file=sys.stderr)
-        for lbl, pth in src_list:
-            print(f'      * {lbl}: {pth}', file=sys.stderr)
-    print('', file=sys.stderr)
-    print('[Sandbox Error] Startup aborted. Please ensure all rule filenames are distinct.', file=sys.stderr)
-    print('==========================================================', file=sys.stderr)
+output = '\n\n---\n\n'.join(sections) + '\n' if sections else '# Antigravity Container Sandbox Rules\n'
+try:
+    os.makedirs(os.path.dirname(os.path.abspath(target_gemini_file)), exist_ok=True)
+    with open(target_gemini_file, 'w', encoding='utf-8') as f:
+        f.write(output)
+except Exception as e:
+    print(f'[Sandbox Error] Failed to write compiled GEMINI.md: {e}', file=sys.stderr)
     sys.exit(1)
 "
 }
@@ -499,23 +532,44 @@ except Exception as e:
 function cmd_rules_list() {
   ensure_sandbox_venv
   ensure_whitelist_config
+  local gemini_host_dir="${HOST_GEMINI_DIR:-$HOME/.gemini}"
+  local builtin_rules_dir="$DIR/customizations/rules"
   local user_rules_dir="${HOST_SANDBOX_RULES_DIR:-$SANDBOX_DIR/rules}"
+  local sandbox_gemini="${HOST_SANDBOX_GEMINI:-$SANDBOX_DIR/GEMINI.md}"
+  local host_gemini="$gemini_host_dir/GEMINI.md"
+
   "$PYTHON_BIN" -c "
 import os
-rdir = '$user_rules_dir'
+
+builtin_dir = '$builtin_rules_dir'
+user_dir = '$user_rules_dir'
+host_gemini_file = '$host_gemini'
+target_gemini_file = '$sandbox_gemini'
+
 print('==========================================================')
-print('  Sandbox-Specific Global Rules (~/.antigravity-sandbox/rules)')
+print('  Antigravity Sandbox Rules & GEMINI.md Status')
 print('==========================================================')
-rules = []
-if os.path.isdir(rdir):
-    for f in sorted(os.listdir(rdir)):
-        if not f.startswith('.') and f.lower().endswith('.md') and os.path.isfile(os.path.join(rdir, f)):
-            rules.append(f)
-if not rules:
-    print('  (No custom sandbox rules configured)')
-else:
-    for idx, r in enumerate(rules, 1):
-        print(f'  {idx}. {r}')
+
+b_rules = [f for f in sorted(os.listdir(builtin_dir)) if not f.startswith('.') and f.lower().endswith('.md')] if os.path.isdir(builtin_dir) else []
+print(f'1. Built-in Container Rules ({len(b_rules)} active):')
+for r in b_rules:
+    print(f'   - {r}')
+
+u_rules = [f for f in sorted(os.listdir(user_dir)) if not f.startswith('.') and f.lower().endswith('.md')] if os.path.isdir(user_dir) else []
+print(f'\n2. User Sandbox Rules (~/.antigravity-sandbox/rules/) ({len(u_rules)} active):')
+if not u_rules:
+    print('   (No custom rules in ~/.antigravity-sandbox/rules/)')
+for r in u_rules:
+    print(f'   - {r}')
+
+has_host = os.path.isfile(host_gemini_file) and os.path.getsize(host_gemini_file) > 0
+host_status = 'Present' if has_host else 'None'
+print(f'\n3. Host Global Rules (~/.gemini/GEMINI.md): {host_status}')
+
+has_compiled = os.path.isfile(target_gemini_file) and os.path.getsize(target_gemini_file) > 0
+compiled_status = f'Compiled ({os.path.getsize(target_gemini_file)} bytes)' if has_compiled else 'Not compiled yet'
+print(f'\n4. Target Container GEMINI.md (~/.antigravity-sandbox/GEMINI.md):')
+print(f'   {compiled_status}')
 print('==========================================================')
 "
 }
@@ -542,6 +596,22 @@ case "$COMMAND" in
     esac
     ;;
 
+  rules)
+    SUB_CMD="$1"
+    shift || true
+    case "$SUB_CMD" in
+      list|ls|"")
+        compile_sandbox_rules
+        cmd_rules_list
+        ;;
+      *)
+        echo "Unknown rules command: $SUB_CMD" >&2
+        echo "Usage: antigravity-sandbox rules [list]" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
   start)
     if [ -n "$1" ]; then
       echo "[Notice] 'start' no longer accepts a workspace path parameter."
@@ -551,7 +621,7 @@ case "$COMMAND" in
 
     ensure_sandbox_venv
     ensure_whitelist_config
-    validate_rule_collisions
+    compile_sandbox_rules
     generate_compose_override
 
     if is_container_running; then
@@ -600,7 +670,7 @@ except Exception:
 
   restart)
     echo "[Sandbox] Restarting Sandbox..."
-    validate_rule_collisions
+    compile_sandbox_rules
     generate_compose_override
     run_compose restart
     echo "[Sandbox] Sandbox is running with Language Server daemon."
@@ -613,6 +683,7 @@ except Exception:
     ;;
 
   status)
+    compile_sandbox_rules
     run_compose ps 2>/dev/null || true
     if is_container_running; then
       echo "[Status] Language Server daemon: Active (Listening on https://127.0.0.1:58432)"

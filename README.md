@@ -111,14 +111,14 @@ antigravity-sandbox workspace remove /path/to/project-alpha
 
 ## Sandbox-Specific Global Rules (`~/.antigravity-sandbox/rules/*.md`)
 
-You can define global agent rules that **only** apply when Antigravity is running inside the sandbox runtime container (and will not load when running natively on macOS).
+Define global agent rules that only apply when running inside the sandbox container.
 
-To add a sandbox-specific rule, just place any Markdown file directly into `~/.antigravity-sandbox/rules/`. The sandbox will automatically merge these rules with the built-in rules when the container starts.
+Place any Markdown files into `~/.antigravity-sandbox/rules/`. The sandbox compiles these alongside built-in container rules and host global rules into `~/.antigravity-sandbox/GEMINI.md`, which is mounted into the container while keeping your host macOS `~/.gemini/GEMINI.md` untouched.
 
-### Key Guarantees
-- **Host Isolation**: The container uses an in-memory `tmpfs` overlay for rules, ensuring rules created in `~/.antigravity-sandbox/rules/` never leak back or pollute host macOS `~/.gemini/config/rules/`.
-- **Fail-Fast Collision Detection**: The CLI and container entrypoint validate rule filenames across host global rules, built-in container rules, and user sandbox rules. If two rules share the exact same filename, startup halts immediately with a clear error to prevent rule ambiguity.
-- **Strict File Filtering**: Only regular `.md` files are merged; non-markdown files, hidden files (e.g. `.DS_Store`), and subdirectories are safely ignored.
+```bash
+# Inspect active rules and compilation status
+antigravity-sandbox rules
+```
 
 ---
 
