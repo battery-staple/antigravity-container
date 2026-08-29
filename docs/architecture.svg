@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" width="100%" height="100%">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; }
+      .host-box { fill: #161b22; stroke: #30363d; stroke-width: 2; rx: 12; }
+      .sandbox-box { fill: #1f242c; stroke: #58a6ff; stroke-width: 2; stroke-dasharray: 6 4; rx: 10; }
+      .node-box { fill: #21262d; stroke: #8b949e; stroke-width: 1.5; rx: 8; }
+      .secrets-box { fill: #21262d; stroke: #f85149; stroke-width: 1.5; stroke-dasharray: 4 4; rx: 8; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; fill: #58a6ff; }
+      .host-title { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 600; fill: #8b949e; }
+      .text-main { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 13px; font-weight: 600; fill: #c9d1d9; text-anchor: middle; }
+      .text-sub { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 11px; fill: #8b949e; text-anchor: middle; }
+      .text-danger { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 11px; fill: #f85149; text-anchor: middle; }
+      .edge { stroke: #58a6ff; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .edge-bidir { stroke: #58a6ff; stroke-width: 2; fill: none; marker-start: url(#arrow-start); marker-end: url(#arrow); }
+      .label-bg { fill: #161b22; rx: 4; }
+      .label-text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 500; fill: #58a6ff; text-anchor: middle; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#58a6ff" />
+    </marker>
+    <marker id="arrow-start" viewBox="0 0 10 10" refX="0" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 8 1.5 L 0 5 L 8 8.5 z" fill="#58a6ff" />
+    </marker>
+  </defs>
+
+  <!-- Outer Host Container -->
+  <rect x="15" y="15" width="870" height="490" class="host-box" />
+  <text x="35" y="42" class="host-title">macOS Host System</text>
+
+  <!-- Frontend UI -->
+  <g transform="translate(365, 30)">
+    <rect width="170" height="54" class="node-box" />
+    <text x="85" y="24" class="text-main">Frontend UI</text>
+    <text x="85" y="42" class="text-sub">(Web Browser / IDE)</text>
+  </g>
+
+  <!-- Connection: Frontend to Sandbox -->
+  <path d="M 450, 84 L 450, 140" class="edge-bidir" />
+  <rect x="375" y="100" width="150" height="20" class="label-bg" />
+  <text x="450" y="114" class="label-text">Localhost (Port 58432)</text>
+
+  <!-- Docker Sandbox Container -->
+  <g transform="translate(195, 145)">
+    <rect width="510" height="125" class="sandbox-box" />
+    <text x="20" y="25" class="title">Docker Sandbox Container</text>
+    
+    <!-- Backend -->
+    <g transform="translate(25, 42)">
+      <rect width="240" height="60" class="node-box" style="stroke: #58a6ff;" />
+      <text x="120" y="26" class="text-main">Antigravity Backend</text>
+      <text x="120" y="46" class="text-sub">Exec Engine (Port 58432)</text>
+    </g>
+
+    <!-- Volume -->
+    <g transform="translate(315, 42)">
+      <rect width="170" height="60" class="node-box" />
+      <text x="85" y="26" class="text-main">Persistent Storage</text>
+      <text x="85" y="46" class="text-sub">/home/developer</text>
+    </g>
+
+    <!-- Backend <-> Volume -->
+    <path d="M 265, 72 L 315, 72" class="edge-bidir" />
+  </g>
+
+  <!-- VirtioFS Mount: path/to/project -->
+  <path d="M 270, 270 L 155, 335" class="edge" />
+  <rect x="170" y="295" width="85" height="18" class="label-bg" />
+  <text x="212" y="308" class="label-text">VirtioFS Mount</text>
+
+  <g transform="translate(55, 340)">
+    <rect width="200" height="56" class="node-box" />
+    <text x="100" y="25" class="text-main">path/to/project</text>
+    <text x="100" y="44" class="text-sub">(Project Workspace)</text>
+  </g>
+
+  <!-- VirtioFS Mount: ~/.gemini -->
+  <path d="M 360, 270 L 360, 335" class="edge" />
+  <rect x="318" y="295" width="85" height="18" class="label-bg" />
+  <text x="360" y="308" class="label-text">VirtioFS Mount</text>
+
+  <g transform="translate(265, 340)">
+    <rect width="190" height="56" class="node-box" />
+    <text x="95" y="25" class="text-main">~/.gemini</text>
+    <text x="95" y="44" class="text-sub">(Auth &amp; Brain History)</text>
+  </g>
+
+  <!-- Gated Call: Host Bridge -->
+  <path d="M 480, 270 L 565, 335" class="edge" />
+  <rect x="495" y="295" width="65" height="18" class="label-bg" />
+  <text x="527" y="308" class="label-text">Gated Call</text>
+
+  <g transform="translate(470, 340)">
+    <rect width="190" height="56" class="node-box" />
+    <text x="95" y="25" class="text-main">Host Bridge Daemon</text>
+    <text x="95" y="44" class="text-sub">TCP Port 58433</text>
+  </g>
+
+  <!-- Bridge to Binaries -->
+  <path d="M 565, 396 L 565, 430" class="edge" />
+
+  <g transform="translate(460, 435)">
+    <rect width="210" height="52" class="node-box" />
+    <text x="105" y="23" class="text-main">macOS Host Binaries</text>
+    <text x="105" y="41" class="text-sub">xcodebuild, Simulator, etc.</text>
+  </g>
+
+  <!-- Inaccessible Secrets (No arrows) -->
+  <g transform="translate(675, 340)">
+    <rect width="195" height="80" class="secrets-box" />
+    <text x="97" y="25" class="text-main" style="fill: #f85149;">Inaccessible Host Secrets</text>
+    <text x="97" y="45" class="text-sub">~/.ssh, ~/.aws, Keychain</text>
+    <text x="97" y="63" class="text-danger">[Physically Isolated]</text>
+  </g>
+</svg>
