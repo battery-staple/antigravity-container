@@ -27,6 +27,8 @@ REPO_LEGACY_WHITELIST_FILE="$DIR/config/whitelist.json"
 OVERRIDE_COMPOSE_FILE="$SANDBOX_DIR/docker-compose.override.yml"
 IPC_DIR="$SANDBOX_DIR/ipc"
 LOGS_DIR="$SANDBOX_DIR/logs"
+HOST_BRIDGE_PID_FILE="$IPC_DIR/host-bridge.pid"
+HOST_BRIDGE_LOG_FILE="$LOGS_DIR/host_exec_daemon.log"
 
 function ensure_sandbox_venv() {
   if [ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ]; then
@@ -68,6 +70,108 @@ function run_compose() {
   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose "${compose_args[@]}" "$@"
 }
 
+function get_host_bridge_pid() {
+  if [ -f "$HOST_BRIDGE_PID_FILE" ]; then
+    local pid
+    pid="$(cat "$HOST_BRIDGE_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      local cmd_line
+      cmd_line="$( (ps -ww -p "$pid" -o command= 2>/dev/null || ps -ww -p "$pid" -o args= 2>/dev/null || ps -p "$pid" -o command= 2>/dev/null || true) )"
+      if echo "$cmd_line" | grep -q "host_exec_daemon"; then
+        echo "$pid"
+        return 0
+      fi
+    fi
+  fi
+  # Fallback: check pgrep if pid file was missing or stale
+  local found_pid
+  found_pid="$(pgrep -f "host_exec_daemon.py" 2>/dev/null | head -n 1 || true)"
+  if [ -n "$found_pid" ] && kill -0 "$found_pid" 2>/dev/null; then
+    mkdir -p "$IPC_DIR" 2>/dev/null || true
+    echo "$found_pid" > "$HOST_BRIDGE_PID_FILE" 2>/dev/null || true
+    echo "$found_pid"
+    return 0
+  fi
+  return 1
+}
+
+function is_host_bridge_running() {
+  local pid
+  pid="$(get_host_bridge_pid 2>/dev/null || true)"
+  if [ -n "$pid" ]; then
+    return 0
+  fi
+  return 1
+}
+
+function start_host_bridge_bg() {
+  ensure_sandbox_venv
+  ensure_whitelist_config
+
+  if is_host_bridge_running; then
+    local current_pid
+    current_pid="$(get_host_bridge_pid 2>/dev/null || true)"
+    echo "[Bridge] Host-Exec daemon is already running (PID: $current_pid)."
+    return 0
+  fi
+
+  echo "[Bridge] Spawning Host-Exec daemon in background..."
+  mkdir -p "$LOGS_DIR" "$IPC_DIR" 2>/dev/null || true
+
+  # Clean up stale socket if no daemon is running
+  if [ -e "$IPC_DIR/host-exec.sock" ]; then
+    rm -f "$IPC_DIR/host-exec.sock" 2>/dev/null || true
+  fi
+
+  nohup "$PYTHON_BIN" "$DIR/bridge/host_exec_daemon.py" < /dev/null >> "$HOST_BRIDGE_LOG_FILE" 2>&1 &
+  local bg_pid=$!
+  echo "$bg_pid" > "$HOST_BRIDGE_PID_FILE" 2>/dev/null || true
+
+  # Wait up to 2 seconds to verify daemon started
+  local count=0
+  local started="false"
+  while [ $count -lt 20 ]; do
+    if kill -0 "$bg_pid" 2>/dev/null; then
+      if [ -S "$IPC_DIR/host-exec.sock" ] || nc -z 127.0.0.1 58433 2>/dev/null || (lsof -iTCP:58433 -sTCP:LISTEN -n -P 2>/dev/null | grep -q "$bg_pid"); then
+        started="true"
+        break
+      fi
+    else
+      break
+    fi
+    sleep 0.1
+    count=$((count + 1))
+  done
+
+  if kill -0 "$bg_pid" 2>/dev/null; then
+    echo "[Bridge] Host-Exec daemon started in background (PID: $bg_pid, listening on port 58433)."
+  else
+    echo "[Bridge Warning] Host-Exec daemon failed to start. Check logs at: $HOST_BRIDGE_LOG_FILE" >&2
+  fi
+}
+
+function stop_host_bridge() {
+  local pid
+  pid="$(get_host_bridge_pid 2>/dev/null || true)"
+  if [ -n "$pid" ]; then
+    echo "[Bridge] Stopping Host-Exec daemon (PID: $pid)..."
+    kill "$pid" 2>/dev/null || true
+    local count=0
+    while kill -0 "$pid" 2>/dev/null && [ $count -lt 30 ]; do
+      sleep 0.1
+      count=$((count + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[Bridge Warning] Daemon did not exit cleanly, sending SIGKILL..."
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$HOST_BRIDGE_PID_FILE" "$IPC_DIR/host-exec.sock" 2>/dev/null || true
+    echo "[Bridge] Host-Exec daemon stopped."
+  else
+    rm -f "$HOST_BRIDGE_PID_FILE" "$IPC_DIR/host-exec.sock" 2>/dev/null || true
+  fi
+}
+
 function show_help() {
   echo "=========================================================="
   echo "  Antigravity Sandbox Manager CLI"
@@ -85,14 +189,15 @@ function show_help() {
   echo "  (Alias: rules list)"
   echo ""
   echo "Core Commands:"
-  echo "  start                               Start the sandbox container with whitelisted workspaces"
-  echo "  stop                                Stop the running sandbox container"
-  echo "  restart                             Restart the sandbox container"
+  echo "  start [--no-host-bridge]            Start the sandbox container with whitelisted workspaces"
+  echo "  stop                                Stop the sandbox container and host bridge daemon"
+  echo "  restart [--no-host-bridge]          Restart the sandbox container and host bridge daemon"
   echo "  build                               Rebuild the sandbox container image (after Dockerfile edits)"
   echo "  status                              Display current sandbox status and resource usage"
   echo "  app                                 Launch Antigravity Desktop App connected to Sandbox"
   echo "  open [subpath]                      Open ~/.antigravity-sandbox directory (or subpath) in file manager"
-  echo "  host-bridge                         Start the host binary execution bridge daemon"
+  echo "  host-bridge [start|stop|restart|status|fg]"
+  echo "                                      Manage or start the host binary execution bridge daemon"
   echo "  help                                Show this help message"
   echo "=========================================================="
 }
@@ -638,11 +743,29 @@ case "$COMMAND" in
     ;;
 
   start)
-    if [ -n "$1" ]; then
-      echo "[Notice] 'start' no longer accepts a workspace path parameter."
-      echo "[Notice] Whitelist workspaces separately with: antigravity-sandbox workspace add <path>"
-      echo ""
-    fi
+    START_HOST_BRIDGE="true"
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --no-host-bridge)
+          START_HOST_BRIDGE="false"
+          shift
+          ;;
+        --with-host-bridge)
+          START_HOST_BRIDGE="true"
+          shift
+          ;;
+        -*)
+          echo "[Sandbox Warning] Unknown option for start: $1" >&2
+          shift
+          ;;
+        *)
+          echo "[Notice] 'start' no longer accepts a workspace path parameter ($1)."
+          echo "[Notice] Whitelist workspaces separately with: antigravity-sandbox workspace add <path>"
+          echo ""
+          shift
+          ;;
+      esac
+    done
 
     ensure_sandbox_venv
     ensure_whitelist_config
@@ -661,6 +784,10 @@ case "$COMMAND" in
     # Pre-check port availability
     if (lsof -iTCP:58432 -sTCP:LISTEN -n -P >/dev/null 2>&1 || nc -z 127.0.0.1 58432 2>/dev/null); then
       echo "[Sandbox Warning] Port 58432 appears to be in use by an existing host process." >&2
+    fi
+
+    if [ "$START_HOST_BRIDGE" = "true" ]; then
+      start_host_bridge_bg
     fi
 
     NUM_WORKSPACES=$("$PYTHON_BIN" -c "
@@ -691,12 +818,39 @@ except Exception:
   stop)
     echo "[Sandbox] Stopping Sandbox..."
     run_compose down
+    stop_host_bridge
     ;;
 
   restart)
+    START_HOST_BRIDGE="true"
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --no-host-bridge)
+          START_HOST_BRIDGE="false"
+          shift
+          ;;
+        --with-host-bridge)
+          START_HOST_BRIDGE="true"
+          shift
+          ;;
+        -*)
+          echo "[Sandbox Warning] Unknown option for restart: $1" >&2
+          shift
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+
     echo "[Sandbox] Restarting Sandbox..."
     compile_sandbox_rules
     generate_compose_override
+    if [ "$START_HOST_BRIDGE" = "true" ]; then
+      start_host_bridge_bg
+    else
+      stop_host_bridge
+    fi
     run_compose restart
     echo "[Sandbox] Sandbox is running with Language Server daemon."
     echo "[Sandbox] Web UI available at: https://127.0.0.1:58432"
@@ -713,6 +867,12 @@ except Exception:
     if is_container_running; then
       echo "[Status] Language Server daemon: Active (Listening on https://127.0.0.1:58432)"
     fi
+    if is_host_bridge_running; then
+      hb_pid="$(get_host_bridge_pid 2>/dev/null || true)"
+      echo "[Status] Host-Exec daemon: Active (PID: $hb_pid, Listening on port 58433)"
+    else
+      echo "[Status] Host-Exec daemon: Inactive"
+    fi
     docker stats --no-stream antigravity-sandbox 2>/dev/null || true
     echo ""
     cmd_rules_list
@@ -723,7 +883,7 @@ except Exception:
   app)
     if ! is_container_running; then
       echo "[Antigravity] Starting sandbox container first..."
-      "$DIR/scripts/antigravity-sandbox" start
+      "$DIR/scripts/antigravity-sandbox" start "$@"
     fi
     echo "[Antigravity] Launching Native Desktop App connected to Sandbox (127.0.0.1:58432)..."
     APP_BIN="/Applications/Antigravity.app/Contents/MacOS/Antigravity"
@@ -741,9 +901,39 @@ except Exception:
     ;;
 
   host-bridge)
-    ensure_sandbox_venv
-    echo "[Bridge] Starting Host-Exec Daemon on macOS..."
-    "$PYTHON_BIN" "$DIR/bridge/host_exec_daemon.py"
+    SUB_CMD="$1"
+    shift || true
+    case "$SUB_CMD" in
+      start|--bg|-d)
+        start_host_bridge_bg
+        ;;
+      stop)
+        stop_host_bridge
+        ;;
+      restart)
+        stop_host_bridge
+        start_host_bridge_bg
+        ;;
+      status)
+        if is_host_bridge_running; then
+          hb_pid="$(get_host_bridge_pid 2>/dev/null || true)"
+          echo "[Status] Host-Exec daemon: Active (PID: $hb_pid, Listening on port 58433)"
+        else
+          echo "[Status] Host-Exec daemon: Inactive"
+        fi
+        ;;
+      fg|run|"")
+        ensure_sandbox_venv
+        ensure_whitelist_config
+        echo "[Bridge] Starting Host-Exec Daemon on macOS (foreground)..."
+        "$PYTHON_BIN" "$DIR/bridge/host_exec_daemon.py"
+        ;;
+      *)
+        echo "Unknown host-bridge command: $SUB_CMD" >&2
+        echo "Usage: antigravity-sandbox host-bridge [start|stop|restart|status|fg]" >&2
+        exit 1
+        ;;
+    esac
     ;;
 
   help|--help|-h)

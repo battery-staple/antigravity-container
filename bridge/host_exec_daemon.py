@@ -5,6 +5,7 @@ Runs on macOS host listening on local Unix Domain Socket and TCP localhost.
 Validates HMAC authentication tokens and whitelist policy before executing commands on host.
 """
 
+import atexit
 import hashlib
 import hmac
 import json
@@ -13,6 +14,7 @@ import os
 import re
 import select
 import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -22,6 +24,7 @@ STATE_DIR = os.environ.get("ANTIGRAVITY_STATE_DIR", os.path.expanduser("~/.antig
 IPC_DIR = os.path.join(STATE_DIR, "ipc")
 LOGS_DIR = os.path.join(STATE_DIR, "logs")
 SOCKET_PATH = os.path.join(IPC_DIR, "host-exec.sock")
+PID_FILE_PATH = os.path.join(IPC_DIR, "host-bridge.pid")
 AUTH_SECRET_PATH = os.path.join(IPC_DIR, "auth_secret.key")
 WHITELIST_PATH = os.path.join(STATE_DIR, "whitelist.yaml")
 HOST_EXEC_BIND = os.environ.get("HOST_EXEC_BIND", "0.0.0.0")
@@ -362,9 +365,44 @@ def handle_client(conn: socket.socket, secret: str):
         conn.close()
 
 
+def cleanup():
+    """Clean up socket and PID file on shutdown."""
+    if os.path.exists(SOCKET_PATH):
+        try:
+            os.remove(SOCKET_PATH)
+        except Exception:
+            pass
+    if os.path.exists(PID_FILE_PATH):
+        try:
+            with open(PID_FILE_PATH, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content and int(content) == os.getpid():
+                os.remove(PID_FILE_PATH)
+        except Exception:
+            pass
+
+
+atexit.register(cleanup)
+
+
+def _handle_signal(signum, frame):
+    logging.info("Received signal %d, shutting down daemon...", signum)
+    cleanup()
+    sys.exit(0)
+
+
 def main():
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     secret = get_or_create_secret()
     initial_whitelist = load_whitelist()
+
+    try:
+        with open(PID_FILE_PATH, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        logging.warning("Could not write PID file to %s: %s", PID_FILE_PATH, e)
 
     sockets_to_watch: List[socket.socket] = []
 
@@ -420,11 +458,7 @@ def main():
                 s.close()
             except Exception:
                 pass
-        if os.path.exists(SOCKET_PATH):
-            try:
-                os.remove(SOCKET_PATH)
-            except Exception:
-                pass
+        cleanup()
 
 
 if __name__ == "__main__":

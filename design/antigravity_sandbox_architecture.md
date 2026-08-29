@@ -379,8 +379,11 @@ The table below details all files implementing this architecture:
 # 1. Whitelist your project workspace
 ./scripts/antigravity-sandbox workspace add /path/to/my-project
 
-# 2. Start the sandbox
+# 2. Start the sandbox (automatically spawns host-bridge daemon in background)
 ./scripts/antigravity-sandbox start
+
+# (Optional: start without host-bridge)
+# ./scripts/antigravity-sandbox start --no-host-bridge
 
 # 3. Connect to the UI (Choose either Option A or B):
 # Option A: Open browser to https://localhost:58432
@@ -390,6 +393,6 @@ The table below details all files implementing this architecture:
 # 4. Rebuild container image after modifying Dockerfile.sandbox
 ./scripts/antigravity-sandbox build
 
-# 5. Start host execution bridge (optional)
-./scripts/antigravity-sandbox host-bridge
+# 5. Manage host execution bridge (optional)
+./scripts/antigravity-sandbox host-bridge status
 ```

@@ -30,8 +30,11 @@ ln -sf $(pwd)/scripts/antigravity-sandbox /usr/local/bin/antigravity-sandbox
 # Whitelist your project workspace (defaults to current directory if omitted)
 antigravity-sandbox workspace add $(pwd)
 
-# Start the sandbox (automatically builds image and launches Language Server)
+# Start the sandbox (automatically builds image, launches Language Server, and spawns host-bridge)
 antigravity-sandbox start
+
+# Or start without the background host-bridge daemon:
+# antigravity-sandbox start --no-host-bridge
 ```
 
 ### 3. Connect to the Frontend / IDE
@@ -139,12 +142,27 @@ antigravity-sandbox open whitelist.yaml
 
 ## Host-Exec Bridge (macOS Host Tools)
 
-Because the container runs Linux, macOS-only tools (e.g., Xcode / `xcodebuild`, iOS Simulator, macOS Keychain) cannot execute directly in the sandbox. The optional Host-Exec bridge allows the agent to invoke specific macOS binaries on the host system under strict security guardrails.
+Because the container runs Linux, macOS-only tools (e.g., Xcode / `xcodebuild`, iOS Simulator, macOS Keychain) cannot execute directly in the sandbox. The Host-Exec bridge allows the agent to invoke specific macOS binaries on the host system under strict security guardrails.
 
-### Starting the Daemon
-Start the bridge daemon in a terminal on your macOS host:
+### Starting and Managing the Daemon
+`antigravity-sandbox start` spawns the host-bridge daemon in the background automatically (unless `--no-host-bridge` is passed).
+
+You can also manage or inspect the daemon directly on your macOS host:
 ```bash
-antigravity-sandbox host-bridge
+# Check daemon status
+antigravity-sandbox host-bridge status
+
+# Start daemon in background
+antigravity-sandbox host-bridge start
+
+# Stop daemon
+antigravity-sandbox host-bridge stop
+
+# Restart daemon
+antigravity-sandbox host-bridge restart
+
+# Run daemon in foreground (for interactive debugging)
+antigravity-sandbox host-bridge fg
 ```
 
 ### Configuration & Security
