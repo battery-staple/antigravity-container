@@ -218,6 +218,21 @@ allowed_commands:
     require_interactive_approval: false
 ```
 
+### 7.4 Host Skill Directory Discovery & Read-Only Mounting (`skills.json`)
+To support custom host skills without requiring manual workspace whitelisting or exposing whole parent directories, the sandbox features a modular discovery and mounting engine (`scripts/skills_mount.py`):
+1. **Discovery Scope**: Scans global (`~/.gemini/config/skills.json`) and whitelisted workspace customization roots (`.agents/skills.json`, `.agent/skills.json`, etc.), following recursive `"inherits"` trees with cycle detection.
+2. **Path Resolution & Validation**: Resolves home-relative (`~/`), absolute, and config-relative paths, validating their presence on the host before attempting to mount.
+3. **Mount Conflict & Hierarchy Resolution**:
+   - Skips skill directories that are already within an active read-write workspace.
+   - Deduplicates nested skill directories (keeping only the top-level parent).
+   - Retains skill directories that are ancestors of a workspace, ordering them so parent `:ro` mounts precede child `:cached` workspace mounts in `docker-compose.override.yml`.
+4. **Security Invariant**: Discovered skill directories outside workspaces are strictly mounted **read-only (`:ro`)**, preventing container processes from modifying host skill repositories.
+
+```bash
+# View discovered skill configurations and active read-only mounts
+antigravity-sandbox skills
+```
+
 ---
 
 ## 8. Host Binary Whitelisting & Execution Bridge (Host-Exec)
@@ -358,7 +373,9 @@ The table below details all files implementing this architecture:
 | :--- | :--- |
 | [`Dockerfile.sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/Dockerfile.sandbox) | Hardened Ubuntu 24.04 image with Node.js 22, Go 1.23, Python 3, built-in Antigravity language_server, customizations, and user setup. |
 | [`docker-compose.yml`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/docker-compose.yml) | Service definition, VirtioFS bind mounts, `GEMINI.md` shadow mount, shared brain volume, dev ports (3000-3005, 5173, 8080, 8081), and shm_size (2gb). |
-| [`scripts/antigravity-sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/antigravity-sandbox) | Unified CLI tool (`start`, `stop`, `restart`, `build`, `app`, `host-bridge`, `status`, `workspace`, `rules`). |
+| [`scripts/antigravity-sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/antigravity-sandbox) | Unified CLI tool (`start`, `stop`, `restart`, `build`, `app`, `host-bridge`, `status`, `workspace`, `skills`, `rules`). |
+| [`scripts/skills_mount.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/skills_mount.py) | Modular skills engine for discovery, recursive inheritance parsing, conflict resolution, and volume generation. |
+| [`tests/test_skills_mount.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/tests/test_skills_mount.py) | Unit tests verifying all modular stages and edge cases of the skills mounting engine. |
 | [`security/entrypoint.sh`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/security/entrypoint.sh) | Container entrypoint auto-seeding skills and launching language server. |
 | [`customizations/rules/container-environment.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/customizations/rules/container-environment.md) | Built-in agent rule explaining container environment and impunity. |
 | `~/.antigravity-sandbox/rules/*.md` | User-defined global rules that only apply when executing inside the sandbox container. |

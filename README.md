@@ -112,6 +112,23 @@ antigravity-sandbox workspace remove /path/to/project-alpha
 
 ---
 
+## Host Skill Discovery & Read-Only Mounting (`skills.json`)
+
+Antigravity supports declaring custom skill directories via `skills.json` (globally in `~/.gemini/config/skills.json` and in project workspaces under `.agents/skills.json`).
+
+The sandbox CLI automatically:
+- Scans global and whitelisted workspace `skills.json` configurations.
+- Recursively traverses `"inherits"` chains across configurations.
+- Validates host directory paths and detects duplicate/nested paths.
+- Automatically mounts discovered skill directories into the container as **read-only (`:ro`)** VirtioFS volumes, ensuring your skills are available to the container Language Server without granting write permissions.
+
+```bash
+# Inspect discovered skills.json configs and active read-only skill mounts
+antigravity-sandbox skills
+```
+
+---
+
 ## Sandbox-Specific Global Rules (`~/.antigravity-sandbox/rules/*.md`)
 
 Define global agent rules that only apply when running inside the sandbox container.
