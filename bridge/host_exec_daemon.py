@@ -227,25 +227,9 @@ def prompt_user_approval(command_name: str, args: List[str]) -> bool:
         return False
 
 
-def translate_cwd(container_cwd: str, whitelist: Optional[Dict[str, Any]] = None) -> str:
-    """Translate container directory path to corresponding macOS host path."""
-    if os.path.isdir(container_cwd):
-        return container_cwd
-
-    repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    if whitelist and whitelist.get("allowed_workspaces"):
-        allowed = whitelist["allowed_workspaces"]
-        if container_cwd.startswith("/workspace") and len(allowed) > 0:
-            rel = os.path.relpath(container_cwd, "/workspace")
-            candidate = os.path.join(allowed[0], rel) if rel != "." else allowed[0]
-            if os.path.isdir(candidate):
-                return candidate
-
-    host_workspace = os.environ.get("HOST_WORKSPACE_PATH")
-    if host_workspace and os.path.isdir(host_workspace):
-        return host_workspace
-
-    return repo_dir if os.path.isdir(repo_dir) else os.path.expanduser("~")
+def resolve_cwd(cwd: Optional[str]) -> str:
+    """Resolve working directory on host, falling back to home if invalid."""
+    return cwd if cwd and os.path.isdir(cwd) else os.path.expanduser("~")
 
 
 def handle_client(conn: socket.socket, secret: str):
@@ -267,7 +251,7 @@ def handle_client(conn: socket.socket, secret: str):
         command_name = req.get("command")
         args = req.get("args", [])
         token = req.get("token", "")
-        raw_cwd = req.get("cwd", "/workspace")
+        raw_cwd = req.get("cwd")
 
         whitelist = load_whitelist()
 
@@ -346,7 +330,7 @@ def handle_client(conn: socket.socket, secret: str):
                 return
             logging.info("Execution approved by user.")
 
-        effective_cwd = translate_cwd(raw_cwd, whitelist)
+        effective_cwd = resolve_cwd(raw_cwd)
         logging.info("Executing '%s' with cwd='%s'", bin_path, effective_cwd)
 
         cmd = [bin_path] + args
