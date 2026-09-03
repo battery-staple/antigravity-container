@@ -123,7 +123,6 @@ def load_whitelist() -> Dict[str, Any]:
 
     candidate_paths.extend([
         WHITELIST_PATH,
-        os.path.join(STATE_DIR, "whitelist.yml"),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "whitelist.default.yaml")),
     ])
 
@@ -152,35 +151,11 @@ def load_whitelist() -> Dict[str, Any]:
         return _cached_whitelist
 
     # Default policy fallback
-    return {
-        "allowed_workspaces": [],
-        "allowed_commands": {
-            "xcodebuild": {
-                "binary_path": "/usr/bin/xcodebuild",
-                "allowed_args_regex": "^(-version|-showsdks|-list.*)$",
-                "require_interactive_approval": False,
-                "description": "Apple Xcode build system and SDK inspection",
-            },
-            "simulator": {
-                "binary_path": "/usr/bin/open",
-                "allowed_args_regex": "^-a Simulator$",
-                "require_interactive_approval": False,
-                "description": "Launch Apple iOS Simulator",
-            },
-            "git-credential-osxkeychain": {
-                "binary_path": "/usr/bin/git",
-                "allowed_args_regex": "^credential-osxkeychain (get|store|erase)$",
-                "require_interactive_approval": True,
-                "description": "macOS Keychain Git credential helper",
-            },
-            "sw_vers": {
-                "binary_path": "/usr/bin/sw_vers",
-                "allowed_args_regex": "^.*$",
-                "require_interactive_approval": False,
-                "description": "macOS system version information",
-            },
-        },
-    }
+    default_yaml_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "whitelist.default.yaml"))
+    default_cfg = _read_yaml_config(default_yaml_path)
+    if default_cfg:
+        return default_cfg
+    return {"allowed_workspaces": [], "allowed_commands": {}}
 
 
 def verify_token(req_dict: Dict[str, Any], token: str, secret: str) -> bool:
@@ -197,15 +172,7 @@ def verify_token(req_dict: Dict[str, Any], token: str, secret: str) -> bool:
     expected_canonical = hmac.new(
         secret.encode("utf-8"), canonical_payload.encode("utf-8"), hashlib.sha256
     ).hexdigest()
-    if hmac.compare_digest(expected_canonical, token):
-        return True
-
-    # Support legacy flattened string HMAC for backward compatibility
-    legacy_str = f"{req_dict.get('command')} {' '.join(req_dict.get('args', []))}".strip()
-    expected_legacy = hmac.new(
-        secret.encode("utf-8"), legacy_str.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected_legacy, token)
+    return hmac.compare_digest(expected_canonical, token)
 
 
 def prompt_user_approval(command_name: str, args: List[str]) -> bool:
