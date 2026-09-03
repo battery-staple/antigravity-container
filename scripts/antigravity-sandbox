@@ -22,8 +22,6 @@ VENV_DIR="$SANDBOX_DIR/.venv"
 PYTHON_BIN=""
 WHITELIST_FILE="$SANDBOX_DIR/whitelist.yaml"
 DEFAULT_WHITELIST_FILE="$DIR/config/whitelist.default.yaml"
-LEGACY_WHITELIST_FILE="$SANDBOX_DIR/whitelist.json"
-REPO_LEGACY_WHITELIST_FILE="$DIR/config/whitelist.json"
 OVERRIDE_COMPOSE_FILE="$SANDBOX_DIR/docker-compose.override.yml"
 IPC_DIR="$SANDBOX_DIR/ipc"
 LOGS_DIR="$SANDBOX_DIR/logs"
@@ -226,75 +224,18 @@ function ensure_whitelist_config() {
   chmod 0700 "$IPC_DIR" 2>/dev/null || true
 
   "$PYTHON_BIN" -c "
-import os, sys, shutil, yaml
+import os, sys, shutil
 
 cfg = '$WHITELIST_FILE'
-legacy_cfg = '$LEGACY_WHITELIST_FILE'
-repo_legacy_cfg = '$REPO_LEGACY_WHITELIST_FILE'
 default_cfg = '$DEFAULT_WHITELIST_FILE'
 
-def migrate_legacy_json(json_path):
-    if os.path.exists(json_path):
-        try:
-            import json
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-            if data:
-                os.makedirs(os.path.dirname(cfg), exist_ok=True)
-                with open(cfg, 'w') as f:
-                    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
-                os.remove(json_path)
-                return True
-        except Exception:
-            pass
-    return False
-
 if not os.path.exists(cfg):
-    # 1. One-time migration: Convert legacy JSON to YAML if found
-    if migrate_legacy_json(legacy_cfg) or migrate_legacy_json(repo_legacy_cfg):
-        sys.exit(0)
-
-    # 2. Copy from default template config/whitelist.default.yaml
     if os.path.exists(default_cfg):
         try:
+            os.makedirs(os.path.dirname(cfg), exist_ok=True)
             shutil.copyfile(default_cfg, cfg)
-            sys.exit(0)
-        except Exception:
-            pass
-
-    # 3. Fallback default YAML policy
-    default_data = {
-        'allowed_workspaces': [],
-        'allowed_commands': {
-            'xcodebuild': {
-                'binary_path': '/usr/bin/xcodebuild',
-                'allowed_args_regex': '^' + '(-version|-showsdks|-list.*)' + '$',
-                'require_interactive_approval': False,
-                'description': 'Apple Xcode build system and SDK inspection'
-            },
-            'simulator': {
-                'binary_path': '/usr/bin/open',
-                'allowed_args_regex': '^-a Simulator$',
-                'require_interactive_approval': False,
-                'description': 'Launch Apple iOS Simulator'
-            },
-            'git-credential-osxkeychain': {
-                'binary_path': '/usr/bin/git',
-                'allowed_args_regex': '^credential-osxkeychain (get|store|erase)$',
-                'require_interactive_approval': True,
-                'description': 'macOS Keychain Git credential helper'
-            },
-            'sw_vers': {
-                'binary_path': '/usr/bin/sw_vers',
-                'allowed_args_regex': '^.*$',
-                'require_interactive_approval': False,
-                'description': 'macOS system version information'
-            }
-        }
-    }
-    os.makedirs(os.path.dirname(cfg), exist_ok=True)
-    with open(cfg, 'w') as f:
-        yaml.safe_dump(default_data, f, default_flow_style=False, sort_keys=False)
+        except Exception as e:
+            print(f'[Sandbox Warning] Failed to copy default whitelist template: {e}', file=sys.stderr)
 "
 }
 
