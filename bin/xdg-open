@@ -20,9 +20,7 @@ echo "  [Browser Request] Opening URL:" >&2
 echo "  $URL" >&2
 echo "==========================================================" >&2
 
-# Attempt to open on host macOS via host-exec if available
-if command -v host-exec >/dev/null 2>&1 && [ -S "/var/run/host-exec/host_exec.sock" ]; then
-    host-exec open "$URL" 2>/dev/null || true
-fi
+# Forward browser request to host macOS via host-exec
+host-exec open "$URL" 2>/dev/null || true
 
 exit 0

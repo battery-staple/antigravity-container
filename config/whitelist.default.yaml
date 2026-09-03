@@ -6,11 +6,11 @@ allowed_commands:
     allowed_args_regex: ^(-version|-showsdks|-list.*)$
     require_interactive_approval: false
     description: Apple Xcode build system and SDK inspection
-  simulator:
+  open:
     binary_path: /usr/bin/open
-    allowed_args_regex: ^-a Simulator$
+    allowed_args_regex: ^(-a Simulator|https?://.*)$
     require_interactive_approval: false
-    description: Launch Apple iOS Simulator
+    description: Open URLs or macOS applications (e.g. Simulator)
   git-credential-osxkeychain:
     binary_path: /usr/bin/git
     allowed_args_regex: ^credential-osxkeychain (get|store|erase)$
