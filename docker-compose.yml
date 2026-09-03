@@ -26,9 +26,6 @@ services:
           memory: '${SANDBOX_MEM:-8GB}'
           pids: 1024
     environment:
-      - HOST_UID=${HOST_UID:-1000}
-      - HOST_GID=${HOST_GID:-1000}
-      - JETSKI_LS_PORT=58432
       - HOST_EXEC_HOST=host.docker.internal
       - HOST_EXEC_PORT=58433
     extra_hosts:

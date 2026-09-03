@@ -11,7 +11,7 @@ export TMPDIR="${TMPDIR:-/home/developer/.gemini/sandbox-tmp}"
 mkdir -p /home/developer/.gemini/antigravity "$TMPDIR" /home/developer/.gemini/config /home/developer/.npm-global /home/developer/.gradle /workspace 2>/dev/null || true
 
 # Seed host-exec skill into builtin skills
-mkdir -p /home/developer/.gemini/antigravity/builtin/skills/host-exec /home/developer/.gemini/config/skills/host-exec 2>/dev/null || true
+mkdir -p /home/developer/.gemini/antigravity/builtin/skills/host-exec 2>/dev/null || true
 if [ -f "/etc/antigravity/customizations/skills/host-exec/SKILL.md" ]; then
     cp -u /etc/antigravity/customizations/skills/host-exec/SKILL.md /home/developer/.gemini/antigravity/builtin/skills/host-exec/ 2>/dev/null || \
     cp /etc/antigravity/customizations/skills/host-exec/SKILL.md /home/developer/.gemini/antigravity/builtin/skills/host-exec/ 2>/dev/null || true
