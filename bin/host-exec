@@ -70,19 +70,16 @@ def format_capabilities(commands_dict: dict) -> str:
 
 def connect_to_daemon():
     """Attempt TCP connection to host."""
-    hosts_to_try = []
-    if HOST_EXEC_HOST:
-        hosts_to_try.append(HOST_EXEC_HOST)
-    if "host.docker.internal" not in hosts_to_try:
-        hosts_to_try.append("host.docker.internal")
-    if not os.environ.get("HOST_EXEC_HOST") and "127.0.0.1" not in hosts_to_try:
+    target_host = HOST_EXEC_HOST or "host.docker.internal"
+    hosts_to_try = [target_host]
+    if target_host != "127.0.0.1":
         hosts_to_try.append("127.0.0.1")
 
-    for target_host in hosts_to_try:
+    for h in hosts_to_try:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(1.0)
-            s.connect((target_host, HOST_EXEC_PORT))
+            s.connect((h, HOST_EXEC_PORT))
             s.settimeout(None)
             return s
         except Exception:
@@ -133,11 +130,16 @@ def main():
     canonical_bytes = json.dumps(payload_to_sign, sort_keys=True, separators=(",", ":")).encode("utf-8")
     token = hmac.new(secret.encode("utf-8"), canonical_bytes, hashlib.sha256).hexdigest()
 
+    req_id = f"req-{os.urandom(4).hex()}"
+    traj_id = os.environ.get("ANTIGRAVITY_TRAJECTORY_ID", "")
+
     req = {
         "command": "__list__" if is_list_query else cmd,
         "args": args,
         "token": token,
         "cwd": os.getcwd(),
+        "request_id": req_id,
+        "trajectory_id": traj_id,
     }
 
     sock = connect_to_daemon()
@@ -146,7 +148,6 @@ def main():
         sys.exit(127)
 
     try:
-        sock.settimeout(30.0)
         sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
 
         chunks = []

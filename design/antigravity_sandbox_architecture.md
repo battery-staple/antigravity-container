@@ -296,6 +296,18 @@ host-exec --list
 ```
 This queries the daemon over IPC and displays a live table with descriptions, binary paths, allowed argument regexes, and approval requirements.
 
+### 8.4 Asynchronous Concurrency, Interleaving Guarantees & Process Lifecycle
+The host bridge employs an `asyncio` event-driven architecture designed for high-concurrency multi-agent and multi-conversation workflows:
+
+1. **Non-Blocking Parallel Execution**:
+   The daemon serves incoming TCP connections asynchronously (`asyncio.start_server`). Fast non-interactive commands (e.g. `sw_vers`) and introspection queries (`--list`) complete within milliseconds without Head-of-Line (HOL) blocking behind long-running tasks (e.g. `xcodebuild`).
+2. **Interactive Approval Modal Serialization**:
+   Commands requiring user confirmation (`require_interactive_approval: true`) acquire an asynchronous FIFO lock (`_approval_lock`). This prevents overlapping or competing macOS AppleScript dialogs, ensuring modal prompts are presented sequentially with clear trajectory and request attribution, while non-interactive commands continue running in parallel.
+3. **Trajectory & Context Attribution**:
+   Guest client invocations automatically inject `ANTIGRAVITY_TRAJECTORY_ID` and generate a unique `request_id`. Foreground daemon logs correlate events with structured, color-coded tokens (`[req:<id>] [traj:<id>] [command]`).
+4. **Process Concurrency Governance & Reaping**:
+   A global semaphore (`MAX_CONCURRENT_HOST_PROCESSES = 16`) bounds total active host processes to protect host system stability. If a client disconnects or aborts mid-execution, the daemon immediately detects EOF and calls `proc.terminate()` on the active child process, preventing zombie or orphaned processes.
+
 ---
 
 ## 9. Agent Awareness & Customizations (Evergreen Rules & Skills)
@@ -376,6 +388,9 @@ The table below details all files implementing this architecture:
 | [`scripts/antigravity-sandbox`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/antigravity-sandbox) | Unified CLI tool (`start`, `stop`, `restart`, `build`, `app`, `host-bridge`, `status`, `workspace`, `skills`, `rules`). |
 | [`scripts/skills_mount.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/scripts/skills_mount.py) | Modular skills engine for discovery, recursive inheritance parsing, conflict resolution, and volume generation. |
 | [`tests/test_skills_mount.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/tests/test_skills_mount.py) | Unit tests verifying all modular stages and edge cases of the skills mounting engine. |
+| [`tests/test_host_exec_daemon.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/tests/test_host_exec_daemon.py) | Unit tests verifying HMAC security, cwd resolution, and whitelist validation. |
+| [`tests/test_host_exec_client.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/tests/test_host_exec_client.py) | Unit tests verifying client context injection, argument parsing, and capabilities formatting. |
+| [`tests/test_host_exec_concurrency.py`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/tests/test_host_exec_concurrency.py) | Asynchronous concurrency integration tests verifying non-blocking execution, modal serialization, and process reaping. |
 | [`security/entrypoint.sh`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/security/entrypoint.sh) | Container entrypoint auto-seeding skills and launching language server. |
 | [`customizations/rules/container-environment.md`](file:///Users/rohengiralt/Documents/Code/LLM/antigravity-container/customizations/rules/container-environment.md) | Built-in agent rule explaining container environment and impunity. |
 | `~/.antigravity-sandbox/rules/*.md` | User-defined global rules that only apply when executing inside the sandbox container. |

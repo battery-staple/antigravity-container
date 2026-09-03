@@ -3,8 +3,10 @@
 Antigravity Host-Exec Daemon
 Runs on macOS host listening on TCP localhost.
 Validates HMAC authentication tokens and whitelist policy before executing commands on host.
+Supports concurrent connections, interactive approval queuing, and process lifecycle management.
 """
 
+import asyncio
 import atexit
 import hashlib
 import hmac
@@ -12,12 +14,10 @@ import json
 import logging
 import os
 import re
-import select
 import shlex
 import signal
-import socket
-import subprocess
 import sys
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 STATE_DIR = os.environ.get("ANTIGRAVITY_STATE_DIR", os.path.expanduser("~/.antigravity-sandbox"))
@@ -28,6 +28,7 @@ AUTH_SECRET_PATH = os.path.join(IPC_DIR, "auth_secret.key")
 WHITELIST_PATH = os.path.join(STATE_DIR, "whitelist.yaml")
 HOST_EXEC_BIND = os.environ.get("HOST_EXEC_BIND", "0.0.0.0")
 HOST_EXEC_PORT = int(os.environ.get("HOST_EXEC_PORT", "58433"))
+MAX_CONCURRENT_HOST_PROCESSES = int(os.environ.get("MAX_CONCURRENT_HOST_PROCESSES", "16"))
 
 # Ensure required state directories exist
 os.makedirs(IPC_DIR, exist_ok=True)
@@ -49,6 +50,30 @@ logging.basicConfig(
 _cached_whitelist: Optional[Dict[str, Any]] = None
 _last_loaded_mtime: float = 0.0
 _last_loaded_path: Optional[str] = None
+
+# ANSI color codes for TTY logging
+ANSI_COLORS = [
+    "\033[36m",  # cyan
+    "\033[35m",  # magenta
+    "\033[34m",  # blue
+    "\033[32m",  # green
+    "\033[33m",  # yellow
+    "\033[96m",  # bright cyan
+]
+ANSI_RESET = "\033[0m"
+
+
+def format_log_prefix(req_id: str, traj_id: str, cmd_name: str = "") -> str:
+    """Format structured correlation tokens for request tracing."""
+    short_traj = traj_id[:8] if traj_id else "manual"
+    short_req = req_id[:10] if req_id else "req-init"
+    tag = f"[{short_req}] [{short_traj}]"
+    if cmd_name:
+        tag += f" [{cmd_name}]"
+    if sys.stdout.isatty():
+        color = ANSI_COLORS[abs(hash(short_req)) % len(ANSI_COLORS)]
+        return f"{color}{tag}{ANSI_RESET}"
+    return tag
 
 
 def get_or_create_secret() -> str:
@@ -175,144 +200,309 @@ def verify_token(req_dict: Dict[str, Any], token: str, secret: str) -> bool:
     return hmac.compare_digest(expected_canonical, token)
 
 
-def prompt_user_approval(command_name: str, args: List[str]) -> bool:
-    """Prompt user for confirmation via native macOS AppleScript dialog."""
-    try:
-        cmd_display = shlex.join([command_name] + args) if isinstance(args, list) else f"{command_name} {args}"
-        escaped_cmd = cmd_display.replace("\\", "\\\\").replace('"', '\\"')
-        applescript = (
-            f'display dialog "Antigravity Container is requesting to execute the following command on your macOS host:\n\n'
-            f'{escaped_cmd}\n\nDo you authorize this execution?" '
-            f'with title "Antigravity Host Execution Request" '
-            f'buttons {{"Deny", "Approve"}} default button "Deny" with icon caution'
-        )
-        res = subprocess.run(["osascript", "-e", applescript], capture_output=True, text=True)
-        return res.returncode == 0 and "Approve" in res.stdout
-    except Exception as e:
-        logging.error("Failed to prompt user via osascript: %s", e)
-        return False
-
-
 def resolve_cwd(cwd: Optional[str]) -> str:
     """Resolve working directory on host, falling back to home if invalid."""
     return cwd if cwd and os.path.isdir(cwd) else os.path.expanduser("~")
 
 
-def handle_client(conn: socket.socket, secret: str):
-    """Process an individual client request."""
+async def prompt_user_approval_async(
+    command_name: str, args: List[str], req_id: str = "", traj_id: str = ""
+) -> bool:
+    """Prompt user for confirmation via native macOS AppleScript dialog."""
     try:
-        chunks = []
-        while True:
-            chunk = conn.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            if b"\n" in chunk:
-                break
+        cmd_display = shlex.join([command_name] + args) if isinstance(args, list) else f"{command_name} {args}"
+        escaped_cmd = cmd_display.replace("\\", "\\\\").replace('"', '\\"')
+        context_lines = []
+        if traj_id:
+            context_lines.append(f"Trajectory: {traj_id}")
+        if req_id:
+            context_lines.append(f"Request: {req_id}")
+        context_str = ("\n" + "\n".join(context_lines)) if context_lines else ""
 
-        raw_data = b"".join(chunks).decode("utf-8").strip()
-        if not raw_data:
-            return
-        req = json.loads(raw_data)
-        command_name = req.get("command")
-        args = req.get("args", [])
-        token = req.get("token", "")
-        raw_cwd = req.get("cwd")
+        applescript = (
+            f'display dialog "Antigravity Container is requesting to execute the following command on your macOS host:\n\n'
+            f'{escaped_cmd}{context_str}\n\nDo you authorize this execution?" '
+            f'with title "Antigravity Host Execution Request" '
+            f'buttons {{"Deny", "Approve"}} default button "Deny" with icon caution'
+        )
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e", applescript,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, _ = await proc.communicate()
+        stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+        return proc.returncode == 0 and "Approve" in stdout_text
+    except Exception as e:
+        logging.error("Failed to prompt user via osascript: %s", e)
+        return False
 
-        whitelist = load_whitelist()
 
-        if not verify_token(req, token, secret):
-            logging.warning("HMAC Token verification failed!")
-            conn.sendall(
-                (json.dumps({"status": "error", "message": "Authentication failed: invalid HMAC token"}) + "\n").encode("utf-8")
-            )
-            return
+class HostExecServer:
+    """Asynchronous Host-Exec TCP Server managing concurrent request lifecycle."""
 
-        # Handle introspection capability request (__list__)
-        if command_name in ["__list__", "__capabilities__"]:
-            logging.info("Handled introspection capabilities request (__list__)")
-            commands_summary = {}
-            for c_name, policy in whitelist.get("allowed_commands", {}).items():
-                commands_summary[c_name] = {
-                    "binary_path": policy.get("binary_path", ""),
-                    "allowed_args_regex": policy.get("allowed_args_regex", ".*"),
-                    "require_interactive_approval": policy.get("require_interactive_approval", False),
-                    "description": get_command_description(c_name, policy),
+    def __init__(
+        self,
+        secret: str,
+        max_concurrency: int = MAX_CONCURRENT_HOST_PROCESSES,
+    ):
+        self.secret = secret
+        self.max_concurrency = max_concurrency
+        self.approval_lock = asyncio.Lock()
+        self.process_semaphore = asyncio.Semaphore(max_concurrency)
+        self.active_processes: Dict[str, asyncio.subprocess.Process] = {}
+
+    @staticmethod
+    async def send_json(writer: asyncio.StreamWriter, payload: Dict[str, Any]) -> None:
+        """Send newline-delimited JSON payload safely."""
+        try:
+            writer.write((json.dumps(payload) + "\n").encode("utf-8"))
+            await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
+    async def _execute_subprocess_guarded(
+        self,
+        cmd: List[str],
+        effective_cwd: str,
+        req_id: str,
+        prefix: str,
+        reader: asyncio.StreamReader,
+        start_time: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Spawn host subprocess protected by concurrency semaphore and client disconnect guard."""
+        proc = None
+        async with self.process_semaphore:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=effective_cwd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                self.active_processes[req_id] = proc
+
+                async def _watch_client_disconnect() -> bool:
+                    try:
+                        data = await reader.read(1)
+                        if not data:
+                            return True
+                    except Exception:
+                        return True
+                    return False
+
+                disconnect_task = asyncio.create_task(_watch_client_disconnect())
+                comm_task = asyncio.create_task(proc.communicate())
+
+                done, _ = await asyncio.wait(
+                    [disconnect_task, comm_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if disconnect_task in done and disconnect_task.result() is True and comm_task not in done:
+                    logging.warning("%s Client disconnected while process running. Terminating child process...", prefix)
+                    comm_task.cancel()
+                    if proc.returncode is None:
+                        try:
+                            proc.terminate()
+                            await proc.wait()
+                        except Exception:
+                            pass
+                    return None
+
+                if not disconnect_task.done():
+                    disconnect_task.cancel()
+                    try:
+                        await disconnect_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                stdout_bytes, stderr_bytes = comm_task.result()
+                duration_ms = (time.monotonic() - start_time) * 1000
+                logging.info("%s Finished in %.1fms (exit=%d)", prefix, duration_ms, proc.returncode)
+
+                return {
+                    "status": "success",
+                    "returncode": proc.returncode,
+                    "stdout": stdout_bytes.decode("utf-8", errors="replace"),
+                    "stderr": stderr_bytes.decode("utf-8", errors="replace"),
                 }
-            resp = {
-                "status": "success",
-                "type": "capabilities",
-                "allowed_workspaces": whitelist.get("allowed_workspaces", []),
-                "allowed_commands": commands_summary,
-            }
-            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
-            return
+            except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+                logging.warning("%s Execution cancelled. Terminating child process...", prefix)
+                if proc and proc.returncode is None:
+                    try:
+                        proc.terminate()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                raise
+            finally:
+                self.active_processes.pop(req_id, None)
 
-        full_cmd_str = f"{command_name} {shlex.join(args)}".strip()
-        logging.info("Received host execution request: %s", full_cmd_str)
+    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Handle individual client connection from reading request to writing response."""
+        req_id = f"req-{os.urandom(4).hex()}"
+        traj_id = ""
+        command_name = ""
 
-        policies = whitelist.get("allowed_commands", {})
-        if command_name not in policies:
-            logging.warning("Command '%s' is not in host whitelist!", command_name)
-            conn.sendall(
-                (json.dumps({
+        try:
+            raw_line = await reader.readline()
+            if not raw_line:
+                return
+
+            raw_data = raw_line.decode("utf-8", errors="replace").strip()
+            if not raw_data:
+                return
+
+            try:
+                req = json.loads(raw_data)
+            except Exception as e:
+                logging.warning("[%s] Malformed JSON request: %s", req_id, e)
+                await self.send_json(writer, {"status": "error", "message": f"Malformed JSON: {e}"})
+                return
+
+            command_name = str(req.get("command", ""))
+            raw_args = req.get("args", [])
+            args = [str(a) for a in raw_args] if isinstance(raw_args, list) else []
+            token = str(req.get("token", ""))
+            raw_cwd = req.get("cwd")
+            req_id = str(req.get("request_id") or req_id)
+            traj_id = str(req.get("trajectory_id", ""))
+
+            prefix = format_log_prefix(req_id, traj_id, command_name)
+            whitelist = load_whitelist()
+
+            # 1. HMAC Token Verification
+            if not verify_token(req, token, self.secret):
+                logging.warning("%s HMAC Token verification failed!", prefix)
+                await self.send_json(writer, {"status": "error", "message": "Authentication failed: invalid HMAC token"})
+                return
+
+            # 2. Introspection Capabilities Query (__list__)
+            if command_name in ["__list__", "__capabilities__"]:
+                logging.info("%s Handled introspection capabilities request (__list__)", prefix)
+                commands_summary = {}
+                for c_name, policy in whitelist.get("allowed_commands", {}).items():
+                    commands_summary[c_name] = {
+                        "binary_path": policy.get("binary_path", ""),
+                        "allowed_args_regex": policy.get("allowed_args_regex", ".*"),
+                        "require_interactive_approval": policy.get("require_interactive_approval", False),
+                        "description": get_command_description(c_name, policy),
+                    }
+                resp = {
+                    "status": "success",
+                    "type": "capabilities",
+                    "allowed_workspaces": whitelist.get("allowed_workspaces", []),
+                    "allowed_commands": commands_summary,
+                }
+                await self.send_json(writer, resp)
+                return
+
+            full_cmd_str = f"{command_name} {shlex.join(args)}".strip()
+            logging.info("%s Received host execution request: %s", prefix, full_cmd_str)
+
+            # 3. Whitelist Policy Verification
+            policies = whitelist.get("allowed_commands", {})
+            if command_name not in policies:
+                logging.warning("%s Command '%s' is not in host whitelist!", prefix, command_name)
+                await self.send_json(writer, {
                     "status": "error",
                     "error_type": "not_whitelisted",
                     "message": f"Command '{command_name}' is not whitelisted on host (~/.antigravity-sandbox/whitelist.yaml)",
-                }) + "\n").encode("utf-8")
-            )
-            return
+                })
+                return
 
-        policy = policies[command_name]
-        bin_path = policy["binary_path"]
-        args_regex = policy.get("allowed_args_regex", ".*")
-        args_str = shlex.join(args) if args else ""
-        flat_args_str = " ".join(args)
+            policy = policies[command_name]
+            bin_path = policy["binary_path"]
+            args_regex = policy.get("allowed_args_regex", ".*")
+            args_str = shlex.join(args) if args else ""
 
-        if not (re.fullmatch(args_regex, args_str) or re.fullmatch(args_regex, flat_args_str)):
-            logging.warning("Arguments '%s' violated policy regex: %s", args_str, args_regex)
-            conn.sendall(
-                (json.dumps({
+            # 4. Arguments Regex Validation
+            if not re.fullmatch(args_regex, args_str):
+                logging.warning("%s Arguments '%s' violated policy regex: %s", prefix, args_str, args_regex)
+                await self.send_json(writer, {
                     "status": "error",
                     "error_type": "args_violation",
                     "message": f"Command arguments '{args_str}' violated whitelist pattern ({args_regex}) in ~/.antigravity-sandbox/whitelist.yaml",
-                }) + "\n").encode("utf-8")
-            )
-            return
+                })
+                return
 
-        # Check if interactive approval is required
-        if policy.get("require_interactive_approval", False):
-            logging.info("Command '%s' requires interactive approval. Prompting user...", command_name)
-            approved = prompt_user_approval(command_name, args)
-            if not approved:
-                logging.warning("Execution of '%s' was denied by user.", full_cmd_str)
-                conn.sendall(
-                    (json.dumps({
+            # 5. Interactive User Approval (Serialized via approval_lock)
+            if policy.get("require_interactive_approval", False):
+                logging.info("%s Command requires interactive approval. Waiting for approval lock...", prefix)
+                async with self.approval_lock:
+                    logging.info("%s Displaying approval dialog on macOS...", prefix)
+                    approved = await prompt_user_approval_async(command_name, args, req_id, traj_id)
+
+                if not approved:
+                    logging.warning("%s Execution denied by user.", prefix)
+                    await self.send_json(writer, {
                         "status": "error",
                         "error_type": "denied_by_user",
                         "message": "Execution denied by user via macOS approval dialog",
-                    }) + "\n").encode("utf-8")
-                )
-                return
-            logging.info("Execution approved by user.")
+                    })
+                    return
+                logging.info("%s Execution approved by user.", prefix)
 
-        effective_cwd = resolve_cwd(raw_cwd)
-        logging.info("Executing '%s' with cwd='%s'", bin_path, effective_cwd)
+            # 6. Subprocess Execution Guarded by Concurrency Semaphore & Disconnect Watcher
+            effective_cwd = resolve_cwd(raw_cwd)
+            cmd = [bin_path] + args
+            start_time = time.monotonic()
+            logging.info("%s Executing '%s' with cwd='%s'", prefix, bin_path, effective_cwd)
 
-        cmd = [bin_path] + args
-        proc = subprocess.run(cmd, cwd=effective_cwd, capture_output=True, text=True)
-        response = {
-            "status": "success",
-            "returncode": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-        }
-        conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
-    except Exception as e:
-        logging.error("Error handling request: %s", e)
-        conn.sendall((json.dumps({"status": "error", "message": str(e)}) + "\n").encode("utf-8"))
-    finally:
-        conn.close()
+            resp_payload = await self._execute_subprocess_guarded(
+                cmd, effective_cwd, req_id, prefix, reader, start_time
+            )
+            if resp_payload is not None:
+                await self.send_json(writer, resp_payload)
+
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        except Exception as e:
+            prefix = format_log_prefix(req_id, traj_id, command_name)
+            logging.error("%s Error handling request: %s", prefix, e)
+            await self.send_json(writer, {"status": "error", "message": str(e)})
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    def terminate_active_processes(self) -> None:
+        """Terminate all active child processes."""
+        for req_id, proc in list(self.active_processes.items()):
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+        self.active_processes.clear()
+
+
+# Default singleton server instance for process lifecycle and backwards compatibility
+_default_server: Optional[HostExecServer] = None
+_active_processes: Dict[str, asyncio.subprocess.Process] = {}
+_approval_lock: Optional[asyncio.Lock] = None
+_process_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def get_default_server(secret: str = None) -> HostExecServer:
+    """Get or initialize the default HostExecServer singleton."""
+    global _default_server, _active_processes, _approval_lock, _process_semaphore
+    if _default_server is None:
+        sec = secret or get_or_create_secret()
+        _default_server = HostExecServer(sec)
+        _active_processes = _default_server.active_processes
+        _approval_lock = _default_server.approval_lock
+        _process_semaphore = _default_server.process_semaphore
+    return _default_server
+
+
+async def handle_client_async(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, secret: str):
+    """Compatibility entrypoint delegating to HostExecServer."""
+    server = get_default_server(secret)
+    await server.handle_client(reader, writer)
 
 
 def cleanup():
@@ -330,17 +520,17 @@ def cleanup():
 atexit.register(cleanup)
 
 
-def _handle_signal(signum, frame):
-    logging.info("Received signal %d, shutting down daemon...", signum)
-    cleanup()
-    sys.exit(0)
+def terminate_all_active_processes():
+    """Terminate all active child processes on shutdown."""
+    global _default_server
+    if _default_server is not None:
+        _default_server.terminate_active_processes()
 
 
-def main():
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
-
+async def main_async():
+    """Asynchronous entrypoint running TCP server."""
     secret = get_or_create_secret()
+    server_instance = get_default_server(secret)
     initial_whitelist = load_whitelist()
 
     try:
@@ -349,35 +539,57 @@ def main():
     except Exception as e:
         logging.warning("Could not write PID file to %s: %s", PID_FILE_PATH, e)
 
-    # TCP Socket (For Container Guest over host.docker.internal)
-    tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        tcp_sock.bind((HOST_EXEC_BIND, HOST_EXEC_PORT))
-        tcp_sock.listen(10)
-        logging.info("Host-Exec Daemon listening on TCP %s:%s", HOST_EXEC_BIND, HOST_EXEC_PORT)
-    except Exception as e:
-        logging.critical("Failed to bind TCP socket on %s:%s: %s", HOST_EXEC_BIND, HOST_EXEC_PORT, e)
-        sys.exit(1)
+    tcp_server = await asyncio.start_server(
+        server_instance.handle_client,
+        HOST_EXEC_BIND,
+        HOST_EXEC_PORT,
+    )
 
     num_cmds = len(initial_whitelist.get("allowed_commands", {}))
     logging.info(
-        "Host-Exec Daemon is active with %d whitelisted commands. Whitelist will hot-reload on change.", num_cmds
+        "Host-Exec Daemon is active on TCP %s:%s with %d whitelisted commands (max concurrency=%d).",
+        HOST_EXEC_BIND,
+        HOST_EXEC_PORT,
+        num_cmds,
+        server_instance.max_concurrency,
     )
 
-    try:
-        while True:
-            readable, _, _ = select.select([tcp_sock], [], [])
-            for s in readable:
-                conn, _ = s.accept()
-                handle_client(conn, secret)
-    except KeyboardInterrupt:
-        logging.info("Shutting down daemon...")
-    finally:
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+    shutdown_count = 0
+
+    def signal_handler():
+        nonlocal shutdown_count
+        shutdown_count += 1
+        if shutdown_count > 1:
+            logging.critical("Forced shutdown requested. Exiting immediately.")
+            server_instance.terminate_active_processes()
+            sys.exit(1)
+        logging.info("Received shutdown signal. Stopping daemon...")
+        stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
         try:
-            tcp_sock.close()
-        except Exception:
-            pass
+            loop.add_signal_handler(sig, signal_handler)
+        except NotImplementedError:
+            signal.signal(sig, lambda s, f: stop_event.set())
+
+    async with tcp_server:
+        await stop_event.wait()
+
+    logging.info("Shutting down active processes and closing server...")
+    server_instance.terminate_active_processes()
+    tcp_server.close()
+    await tcp_server.wait_closed()
+    cleanup()
+    logging.info("Host-Exec Daemon shutdown complete.")
+
+
+def main():
+    try:
+        asyncio.run(main_async())
+    except (KeyboardInterrupt, SystemExit):
+        terminate_all_active_processes()
         cleanup()
 
 
