@@ -13,7 +13,6 @@ import sys
 
 HOST_EXEC_HOST = os.environ.get("HOST_EXEC_HOST", "host.docker.internal")
 HOST_EXEC_PORT = int(os.environ.get("HOST_EXEC_PORT", "58433"))
-SOCKET_PATH = os.environ.get("HOST_EXEC_SOCKET", "/var/run/host-exec/host-exec.sock")
 AUTH_SECRET_FILE = "/var/run/host-exec/auth_secret.key"
 
 
@@ -70,19 +69,7 @@ def format_capabilities(commands_dict: dict) -> str:
 
 
 def connect_to_daemon():
-    """Attempt connection via Unix domain socket or TCP."""
-    # 1. Direct socket path check
-    if SOCKET_PATH and os.path.exists(SOCKET_PATH):
-        try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(1.0)
-            s.connect(SOCKET_PATH)
-            s.settimeout(None)
-            return s
-        except Exception:
-            pass
-
-    # 2. Attempt TCP connection to host
+    """Attempt TCP connection to host."""
     hosts_to_try = []
     if HOST_EXEC_HOST:
         hosts_to_try.append(HOST_EXEC_HOST)
@@ -101,22 +88,6 @@ def connect_to_daemon():
         except Exception:
             continue
 
-    # 3. Fallback to default unix socket paths
-    default_sockets = [
-        "/var/run/host-exec/host-exec.sock",
-        os.path.expanduser("~/.antigravity-sandbox/ipc/host-exec.sock"),
-    ]
-    for sp in default_sockets:
-        if os.path.exists(sp):
-            try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(1.0)
-                s.connect(sp)
-                s.settimeout(None)
-                return s
-            except Exception:
-                continue
-
     return None
 
 
@@ -127,7 +98,7 @@ def print_daemon_offline_error(full_cmd_str: str):
         f"[HOST-EXEC ERROR] Host Bridge Daemon is not running on the macOS host\n"
         f"================================================================================\n"
         f"Failed to execute command: '{full_cmd_str}'\n"
-        f"Reason: Could not connect to host-exec daemon at {HOST_EXEC_HOST}:{HOST_EXEC_PORT} or {SOCKET_PATH}.\n\n"
+        f"Reason: Could not connect to host-exec daemon at {HOST_EXEC_HOST}:{HOST_EXEC_PORT}.\n\n"
         f"REMEDIATION STEPS FOR THE AGENT:\n"
         f"1. Do NOT retry this command in an automated loop.\n"
         f"2. Inform the user that this command requires execution on their macOS host, but the host bridge daemon is not currently running.\n"

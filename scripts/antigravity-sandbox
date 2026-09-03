@@ -118,11 +118,6 @@ function start_host_bridge_bg() {
   echo "[Bridge] Spawning Host-Exec daemon in background..."
   mkdir -p "$LOGS_DIR" "$IPC_DIR" 2>/dev/null || true
 
-  # Clean up stale socket if no daemon is running
-  if [ -e "$IPC_DIR/host-exec.sock" ]; then
-    rm -f "$IPC_DIR/host-exec.sock" 2>/dev/null || true
-  fi
-
   nohup "$PYTHON_BIN" "$DIR/bridge/host_exec_daemon.py" < /dev/null >> "$HOST_BRIDGE_LOG_FILE" 2>&1 &
   local bg_pid=$!
   echo "$bg_pid" > "$HOST_BRIDGE_PID_FILE" 2>/dev/null || true
@@ -132,7 +127,7 @@ function start_host_bridge_bg() {
   local started="false"
   while [ $count -lt 20 ]; do
     if kill -0 "$bg_pid" 2>/dev/null; then
-      if [ -S "$IPC_DIR/host-exec.sock" ] || nc -z 127.0.0.1 58433 2>/dev/null || (lsof -iTCP:58433 -sTCP:LISTEN -n -P 2>/dev/null | grep -q "$bg_pid"); then
+      if nc -z 127.0.0.1 58433 2>/dev/null || (lsof -iTCP:58433 -sTCP:LISTEN -n -P 2>/dev/null | grep -q "$bg_pid"); then
         started="true"
         break
       fi
@@ -165,10 +160,10 @@ function stop_host_bridge() {
       echo "[Bridge Warning] Daemon did not exit cleanly, sending SIGKILL..."
       kill -9 "$pid" 2>/dev/null || true
     fi
-    rm -f "$HOST_BRIDGE_PID_FILE" "$IPC_DIR/host-exec.sock" 2>/dev/null || true
+    rm -f "$HOST_BRIDGE_PID_FILE" 2>/dev/null || true
     echo "[Bridge] Host-Exec daemon stopped."
   else
-    rm -f "$HOST_BRIDGE_PID_FILE" "$IPC_DIR/host-exec.sock" 2>/dev/null || true
+    rm -f "$HOST_BRIDGE_PID_FILE" 2>/dev/null || true
   fi
 }
 

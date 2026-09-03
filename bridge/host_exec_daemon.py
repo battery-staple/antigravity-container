@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Antigravity Host-Exec Daemon
-Runs on macOS host listening on local Unix Domain Socket and TCP localhost.
+Runs on macOS host listening on TCP localhost.
 Validates HMAC authentication tokens and whitelist policy before executing commands on host.
 """
 
@@ -23,7 +23,6 @@ from typing import Any, Dict, List, Optional, Tuple
 STATE_DIR = os.environ.get("ANTIGRAVITY_STATE_DIR", os.path.expanduser("~/.antigravity-sandbox"))
 IPC_DIR = os.path.join(STATE_DIR, "ipc")
 LOGS_DIR = os.path.join(STATE_DIR, "logs")
-SOCKET_PATH = os.path.join(IPC_DIR, "host-exec.sock")
 PID_FILE_PATH = os.path.join(IPC_DIR, "host-bridge.pid")
 AUTH_SECRET_PATH = os.path.join(IPC_DIR, "auth_secret.key")
 WHITELIST_PATH = os.path.join(STATE_DIR, "whitelist.yaml")
@@ -350,12 +349,7 @@ def handle_client(conn: socket.socket, secret: str):
 
 
 def cleanup():
-    """Clean up socket and PID file on shutdown."""
-    if os.path.exists(SOCKET_PATH):
-        try:
-            os.remove(SOCKET_PATH)
-        except Exception:
-            pass
+    """Clean up PID file on shutdown."""
     if os.path.exists(PID_FILE_PATH):
         try:
             with open(PID_FILE_PATH, "r", encoding="utf-8") as f:
@@ -388,39 +382,15 @@ def main():
     except Exception as e:
         logging.warning("Could not write PID file to %s: %s", PID_FILE_PATH, e)
 
-    sockets_to_watch: List[socket.socket] = []
-
-    # 1. TCP Socket (For Container Guest over host.docker.internal)
+    # TCP Socket (For Container Guest over host.docker.internal)
     tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         tcp_sock.bind((HOST_EXEC_BIND, HOST_EXEC_PORT))
         tcp_sock.listen(10)
-        sockets_to_watch.append(tcp_sock)
         logging.info("Host-Exec Daemon listening on TCP %s:%s", HOST_EXEC_BIND, HOST_EXEC_PORT)
     except Exception as e:
-        logging.error("Failed to bind TCP socket on %s:%s: %s", HOST_EXEC_BIND, HOST_EXEC_PORT, e)
-
-    # 2. Unix Domain Socket (For local macOS host IPC)
-    os.makedirs(IPC_DIR, exist_ok=True)
-    if os.path.exists(SOCKET_PATH):
-        try:
-            os.remove(SOCKET_PATH)
-        except Exception:
-            pass
-
-    try:
-        unix_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        unix_sock.bind(SOCKET_PATH)
-        os.chmod(SOCKET_PATH, 0o666)
-        unix_sock.listen(10)
-        sockets_to_watch.append(unix_sock)
-        logging.info("Host-Exec Daemon listening on Unix socket %s", SOCKET_PATH)
-    except Exception as e:
-        logging.warning("Failed to bind Unix domain socket on %s: %s", SOCKET_PATH, e)
-
-    if not sockets_to_watch:
-        logging.critical("No sockets available to listen on. Exiting.")
+        logging.critical("Failed to bind TCP socket on %s:%s: %s", HOST_EXEC_BIND, HOST_EXEC_PORT, e)
         sys.exit(1)
 
     num_cmds = len(initial_whitelist.get("allowed_commands", {}))
@@ -430,18 +400,17 @@ def main():
 
     try:
         while True:
-            readable, _, _ = select.select(sockets_to_watch, [], [])
+            readable, _, _ = select.select([tcp_sock], [], [])
             for s in readable:
                 conn, _ = s.accept()
                 handle_client(conn, secret)
     except KeyboardInterrupt:
         logging.info("Shutting down daemon...")
     finally:
-        for s in sockets_to_watch:
-            try:
-                s.close()
-            except Exception:
-                pass
+        try:
+            tcp_sock.close()
+        except Exception:
+            pass
         cleanup()
 
 

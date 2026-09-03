@@ -189,7 +189,7 @@ RUN if getent group $USER_GID >/dev/null 2>&1; then \
 # - /home/$USERNAME/.npm-global: Rootless global npm package installations
 # - /home/$USERNAME/go/bin: User Go binaries
 # - /home/$USERNAME/.gradle: Gradle dependency & build cache
-# - /var/run/host-exec: Host-Exec bridge socket directory
+# - /var/run/host-exec: Host-Exec bridge auth secret directory
 # - /etc/antigravity/customizations: Image templates for agent rules & skills
 RUN mkdir -p \
     /workspace \

@@ -184,7 +184,7 @@ Configuration files are centralized under `~/.antigravity-sandbox/`:
 | :--- | :--- |
 | `~/.antigravity-sandbox/whitelist.yaml` | Whitelisted workspace paths and Host-Exec command policies |
 | `~/.antigravity-sandbox/rules/` | Custom sandbox-specific rule markdown files |
-| `~/.antigravity-sandbox/ipc/` | Sockets and PID files for host-bridge daemon |
+| `~/.antigravity-sandbox/ipc/` | Shared auth secret and PID files for host-bridge daemon |
 | `~/.antigravity-sandbox/logs/` | Host-Exec daemon logs (`host_exec_daemon.log`) |
 
 ---
