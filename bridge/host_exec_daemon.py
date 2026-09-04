@@ -205,36 +205,117 @@ def resolve_cwd(cwd: Optional[str]) -> str:
     return cwd if cwd and os.path.isdir(cwd) else os.path.expanduser("~")
 
 
+COCOA_DIALOG_SCRIPT = """use AppleScript version "2.4"
+use framework "Foundation"
+use framework "AppKit"
+use scripting additions
+
+on run argv
+    set cmd_display to item 1 of argv
+    set prompt_text to item 2 of argv
+
+    set theAlert to current application's NSAlert's alloc()'s init()
+    theAlert's setMessageText:"Antigravity Host Execution Request"
+    theAlert's setInformativeText:prompt_text
+    theAlert's setAlertStyle:2
+
+    theAlert's addButtonWithTitle:"Deny"
+    theAlert's addButtonWithTitle:"Approve"
+
+    set scrollView to current application's NSScrollView's alloc()'s initWithFrame:{{0, 0}, {440, 70}}
+    scrollView's setHasVerticalScroller:true
+    scrollView's setHasHorizontalScroller:false
+    scrollView's setAutohidesScrollers:true
+    scrollView's setBorderType:2
+
+    set textView to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {440, 70}}
+    textView's setString:cmd_display
+    textView's setEditable:false
+    textView's setSelectable:true
+    textView's setDrawsBackground:true
+    textView's setTextContainerInset:{width:6, height:6}
+    textView's textContainer()'s setWidthTracksTextView:true
+
+    try
+        set monoFont to current application's NSFont's monospacedSystemFontOfSize:12.0 weight:0.0
+    on error
+        set monoFont to current application's NSFont's userFixedPitchFontOfSize:12.0
+    end try
+    textView's setFont:monoFont
+
+    scrollView's setDocumentView:textView
+    theAlert's setAccessoryView:scrollView
+
+    current application's NSApplication's sharedApplication()'s activateIgnoringOtherApps:true
+    set modalResult to theAlert's runModal()
+    if modalResult = 1001 then
+        return "Approve"
+    else
+        return "Deny"
+    end if
+end run
+"""
+
+
 async def prompt_user_approval_async(
     command_name: str, args: List[str], req_id: str = "", traj_id: str = ""
 ) -> bool:
-    """Prompt user for confirmation via native macOS AppleScript dialog."""
-    try:
-        cmd_display = shlex.join([command_name] + args) if isinstance(args, list) else f"{command_name} {args}"
-        escaped_cmd = cmd_display.replace("\\", "\\\\").replace('"', '\\"')
-        context_lines = []
-        if traj_id:
-            context_lines.append(f"Trajectory: {traj_id}")
-        if req_id:
-            context_lines.append(f"Request: {req_id}")
-        context_str = ("\n" + "\n".join(context_lines)) if context_lines else ""
+    """Prompt user for confirmation via native macOS dialog with monospace codeblock."""
+    cmd_display = shlex.join([command_name] + args) if isinstance(args, list) else f"{command_name} {args}"
+    context_lines = []
+    if traj_id:
+        context_lines.append(f"Trajectory: {traj_id}")
+    if req_id:
+        context_lines.append(f"Request: {req_id}")
 
-        applescript = (
-            f'display dialog "Antigravity Container is requesting to execute the following command on your macOS host:\n\n'
-            f'{escaped_cmd}{context_str}\n\nDo you authorize this execution?" '
+    prompt_parts = [
+        "Antigravity Container is requesting to execute the following command on your macOS host:"
+    ]
+    if context_lines:
+        prompt_parts.append("\n".join(context_lines))
+    prompt_parts.append("Do you authorize this execution?")
+    prompt_text = "\n\n".join(prompt_parts)
+
+    # 1. Primary: Native Cocoa NSAlert with monospaced, read-only NSTextView codeblock
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e", COCOA_DIALOG_SCRIPT, cmd_display, prompt_text,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await proc.communicate()
+        stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
+        if proc.returncode == 0 and stdout_text in ("Approve", "Deny"):
+            return stdout_text == "Approve"
+
+        logging.warning(
+            "Cocoa alert returned code %d (stderr: %s); falling back to display dialog",
+            proc.returncode,
+            stderr_bytes.decode("utf-8", errors="replace").strip(),
+        )
+    except Exception as e:
+        logging.warning("Cocoa alert failed: %s; falling back to display dialog", e)
+
+    # 2. Fallback: Standard AppleScript dialog
+    try:
+        escaped_prompt = prompt_text.replace("\\", "\\\\").replace('"', '\\"')
+        escaped_cmd = cmd_display.replace("\\", "\\\\").replace('"', '\\"')
+        fallback_script = (
+            f'display dialog "{escaped_prompt}" '
+            f'default answer "{escaped_cmd}" '
             f'with title "Antigravity Host Execution Request" '
             f'buttons {{"Deny", "Approve"}} default button "Deny" with icon caution'
         )
         proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", applescript,
+            "osascript", "-e", fallback_script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout_bytes, _ = await proc.communicate()
-        stdout_text = stdout_bytes.decode("utf-8", errors="replace")
-        return proc.returncode == 0 and "Approve" in stdout_text
+        stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
+        return proc.returncode == 0 and stdout_text.startswith("button returned:Approve")
     except Exception as e:
-        logging.error("Failed to prompt user via osascript: %s", e)
+        logging.error("Failed to prompt user via osascript fallback: %s", e)
         return False
 
 
