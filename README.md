@@ -159,7 +159,7 @@ antigravity-sandbox stop
 | `antigravity-sandbox rules` | Inspects active container agent rules and compilation status |
 | `antigravity-sandbox open [rules\|whitelist.yaml]` | Opens the sandbox configuration directory or file in macOS Finder |
 | `antigravity-sandbox host-bridge [start\|stop\|restart\|status\|fg]` | Controls the macOS Host-Exec bridge daemon |
-| `antigravity-sandbox app` | *(Experimental / WIP)* Launches native desktop app connected to container |
+| `antigravity-sandbox ui` | Opens the Antigravity Web UI (`https://localhost:58432`) in default browser |
 
 ### Common Workflows
 

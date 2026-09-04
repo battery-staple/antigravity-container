@@ -30,7 +30,7 @@ ENV LC_ALL=C.UTF-8
 # - Compilation and build toolchains: build-essential (gcc, g++, make), pkg-config, libssl-dev
 # - Python 3 runtime, pip, and virtual environment support
 # - Interactive developer shells and process inspection tools: zsh, tmux, htop, jq
-# - Headless Chromium & Electron shared libraries (required if the backend spawns sidecars)
+# - Headless Chromium shared libraries (required for browser subagents and web automation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \

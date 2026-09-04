@@ -1,8 +1,8 @@
-# Architectural Blueprint: Docker Sandbox for Google Antigravity Desktop App
+# Architectural Blueprint: Docker Sandbox for Google Antigravity
 
 ## 1. Executive Summary & Core Objective
 
-This architectural blueprint defines the engineering design for running the backend and command-execution runtime of the **Google Antigravity Desktop App** (`/Applications/Antigravity.app` on macOS) inside a secure, containerized sandbox using **Docker / OrbStack**.
+This architectural blueprint defines the engineering design for running the backend and command-execution runtime of **Google Antigravity** inside a secure, containerized sandbox using **Docker / OrbStack**.
 
 ### 1.1 The Core Problem & Security Invariant
 In its default configuration, Google Antigravity executes shell commands, runs development compilers, and modifies files directly on the host macOS operating system with full user permissions. This poses significant risks:
@@ -16,7 +16,7 @@ In its default configuration, Google Antigravity executes shell commands, runs d
 flowchart TB
     subgraph macOS_Host ["Host macOS System"]
         IDE["Native macOS IDE / Editor (VS Code, Cursor, Zed, Antigravity IDE)"]
-        UI["Web Browser / Native Electron App (Chrome, Safari, Antigravity.app)"]
+        UI["Web Browser (Chrome, Safari, Firefox, Edge)"]
         PROJ["Host Workspace Folder (/Users/.../my-project)"]
         HOST_BRAIN["Host Conversation Brain (~/.gemini/antigravity/brain)"]
         IDE -->|"Direct Local File Editing (Host FS)"| PROJ
@@ -45,43 +45,17 @@ flowchart TB
 
 ---
 
-## 2. Antigravity Architecture & Frontend Connection Options
+## 2. Antigravity Architecture & Web UI Access
 
 Antigravity operates as a decoupled client/server system where the backend core (`language_server`) serves a full HTTPS web application over port `58432`.
 
-### 2.1 Two Simple Connection Options
+### 2.1 Web Browser Access (`https://localhost:58432`)
 
-Once the sandbox backend is running, you can connect using either of two zero-friction methods:
+Once the sandbox backend is running, you can connect directly using any desktop web browser (Chrome, Safari, Brave, Edge, Firefox):
 
-```mermaid
-flowchart LR
-    subgraph Frontend_Clients ["Frontend Connection Options"]
-        OPT_A["Option A: Web Browser (https://localhost:58432)"]
-        OPT_B["Option B: Native Desktop App (antigravity-sandbox app)"]
-    end
-
-    subgraph Backend_Daemon ["Docker Container Backend"]
-        LS["Language Server Daemon (Port 58432)"]
-    end
-
-    OPT_A -->|"HTTPS / WSS (Any Browser)"| LS
-    OPT_B -->|"DEV_URL Hook (120Hz Electron)"| LS
-```
-
-| Connection Method | Characteristics |
-| :--- | :--- |
-| **Option A: Web Browser** (`https://localhost:58432`) | Open directly in Chrome, Safari, Brave, Edge, or Firefox. Supports multi-tab/multi-window layouts with zero macOS application modifications. |
-| **Option B: Native Desktop App** (`antigravity-sandbox app`) | Launches `/Applications/Antigravity.app` directly via built-in `DEV_URL` hook with native macOS window titlebar and system tray integration. |
-
-#### Option A: Web Browser (`https://localhost:58432`)
-- Open your preferred desktop browser (Chrome, Safari, Brave, Edge, Firefox) and navigate to `https://localhost:58432` (or `https://127.0.0.1:58432`).
-- On initial connection, bypass the local self-signed TLS certificate warning (click **Advanced** $\rightarrow$ **Proceed to localhost**).
-- *Benefits*: 100% feature parity (chat canvas, artifact rendering, subagent monitor, terminal tabs, file diffs), multi-tab support, and zero modification to `/Applications`.
-
-#### Option B: Native Antigravity Desktop App (`antigravity-sandbox app`)
-- Run `./scripts/antigravity-sandbox app` from your terminal.
-- This invokes `/Applications/Antigravity.app` directly with the built-in `DEV_URL="https://127.0.0.1:58432"` environment variable.
-- *Benefits*: Electron bypasses the certificate prompt automatically and renders the interface with native macOS window titlebar traffic lights and system tray integration.
+- **Command**: Run `./scripts/antigravity-sandbox ui` from your terminal, or navigate to `https://localhost:58432` (or `https://127.0.0.1:58432`).
+- **Local TLS Certificate**: On initial connection, bypass the local self-signed TLS certificate warning (click **Advanced** $\rightarrow$ **Proceed to localhost**).
+- **Features & Ergonomics**: Full feature parity (chat canvas, artifact rendering, subagent monitor, terminal tabs, file diffs), multi-tab/multi-window layout support, and zero modifications to host applications.
 
 ---
 
@@ -417,10 +391,8 @@ The table below details all files implementing this architecture:
 # (Optional: start without host-bridge)
 # ./scripts/antigravity-sandbox start --no-host-bridge
 
-# 3. Connect to the UI (Choose either Option A or B):
-# Option A: Open browser to https://localhost:58432
-# Option B: Launch native desktop app
-./scripts/antigravity-sandbox app
+# 3. Connect to the Web UI (or open browser to https://localhost:58432)
+./scripts/antigravity-sandbox ui
 
 # 4. Rebuild container image after modifying Dockerfile.sandbox
 ./scripts/antigravity-sandbox build

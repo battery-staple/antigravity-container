@@ -191,7 +191,7 @@ function show_help() {
   echo "  restart [--no-host-bridge]          Restart the sandbox container and host bridge daemon"
   echo "  build                               Rebuild the sandbox container image (after Dockerfile edits)"
   echo "  status                              Display current sandbox status and resource usage"
-  echo "  app                                 Launch Antigravity Desktop App connected to Sandbox"
+  echo "  ui                                  Open Antigravity Web UI (https://localhost:58432) in browser"
   echo "  open [subpath]                      Open ~/.antigravity-sandbox directory (or subpath) in file manager"
   echo "  host-bridge [start|stop|restart|status|fg]"
   echo "                                      Manage or start the host binary execution bridge daemon"
@@ -832,19 +832,18 @@ except Exception:
     cmd_skills_list
     ;;
 
-  app)
+  ui|web)
     if ! is_container_running; then
-      echo "[Antigravity] Starting sandbox container first..."
+      echo "[Sandbox] Container is not running. Starting container..."
       "$DIR/scripts/antigravity-sandbox" start "$@"
     fi
-    echo "[Antigravity] Launching Native Desktop App connected to Sandbox (127.0.0.1:58432)..."
-    APP_BIN="/Applications/Antigravity.app/Contents/MacOS/Antigravity"
-    if [ -x "$APP_BIN" ]; then
-      DEV_URL="https://127.0.0.1:58432" "$APP_BIN" >/dev/null 2>&1 &
-    elif [ -x "/Applications/Antigravity.app/Contents/MacOS/Electron" ]; then
-      DEV_URL="https://127.0.0.1:58432" "/Applications/Antigravity.app/Contents/MacOS/Electron" >/dev/null 2>&1 &
+    echo "[Sandbox] Opening Web UI (https://localhost:58432)..."
+    if command -v open >/dev/null 2>&1; then
+      open "https://localhost:58432"
+    elif command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "https://localhost:58432" >/dev/null 2>&1 || true
     else
-      DEV_URL="https://127.0.0.1:58432" open -a "/Applications/Antigravity.app"
+      echo "[Sandbox] Open https://localhost:58432 in your desktop browser."
     fi
     ;;
 
