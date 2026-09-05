@@ -34,21 +34,27 @@ Antigravity operates with a decoupled architecture where the Antigravity backend
 
 ## Quickstart
 
-### 1. Prerequisites
+### Prerequisites
 - **macOS** (Apple Silicon or Intel)
 - **Docker Desktop** (with VirtioFS enabled)
 - **Python 3** on host (used by CLI configuration scripts)
 
+### 1. Clone the Repository
+```bash
+git clone https://github.com/battery-staple/antigravity-container.git
+cd antigravity-container
+```
+
 ### 2. Setup CLI
 Symlink the CLI script into your `PATH`:
 ```bash
-ln -sf $(pwd)/scripts/antigravity-sandbox /usr/local/bin/antigravity-sandbox
+sudo ln -sf $(pwd)/scripts/antigravity-sandbox /usr/local/bin/antigravity-sandbox
 ```
 
 ### 3. Whitelist Workspace & Start
 ```bash
-# Whitelist your project workspace (defaults to current directory if path omitted)
-antigravity-sandbox workspace add $(pwd)
+# Whitelist your project workspace
+antigravity-sandbox workspace add /path/to/workspace
 
 # Start the sandbox (builds container, starts Antigravity backend, and spawns Host Bridge)
 antigravity-sandbox start
